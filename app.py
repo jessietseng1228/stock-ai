@@ -1,3 +1,5 @@
+print("🔥 APP IS STARTING")
+
 from flask import Flask, request
 import os
 
