@@ -9,34 +9,37 @@ app = Flask(__name__)
 # 🟢 LINE 設定
 # =========================
 LINE_TOKEN = "kGWl+cSBUwKrKWFmvyDCp0kPabfuiCK5Rtcc2SXPX93jJvTA6e0+X5TkySmutdCrJfCBMEP4UFnguW1SObeNdgVTCXEzGurdKUaCwjNxZHOydseQwQh9Md3EJ1OCM/QRWsN6Va56KMP32J8valpqZwdB04t89/1O/w1cDnyilFU="
-LINE_API_REPLY = "https://api.line.me/v2/bot/message/reply"
-LINE_API_PUSH = "https://api.line.me/v2/bot/message/push"
 
-# 👉 之後從 webhook 取得（先用 debug 拿）
-USER_ID = "先填你的USER_ID"
+LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
-# =========================
-# 🟢 前5檔股票
-# =========================
-TOP_STOCKS = ["2330", "2317", "2454", "2881", "0050"]
+USER_ID = "你的USER_ID"
 
 
 # =========================
-# 🟢 查股價 function
+# 🟢 查股價（穩定版）
 # =========================
 def get_stock_price(code):
     try:
-        stock = code + ".TW"
-        data = yf.Ticker(stock).history(period="2d")
+        stock = f"{code}.TW"
+        data = yf.Ticker(stock).history(period="5d")
 
-        if data.empty:
-            return "查無資料"
+        # 防空
+        if data is None or data.empty:
+            return f"{code}：查無資料（Yahoo限制或代碼錯誤）"
 
-        price = data["Close"].iloc[-1]
-        change = price - data["Close"].iloc[-2]
-        pct = (change / data["Close"].iloc[-2]) * 100
+        close = data["Close"].dropna()
 
-        # 🧠 簡單原因判斷
+        if len(close) < 2:
+            return f"{code}：資料不足"
+
+        price = close.iloc[-1]
+        prev = close.iloc[-2]
+
+        change = price - prev
+        pct = (change / prev) * 100
+
+        # 🧠 簡單判斷原因
         if pct > 2:
             reason = "🔥 強勢上漲"
         elif pct < -2:
@@ -44,15 +47,39 @@ def get_stock_price(code):
         else:
             reason = "📊 小幅震盪"
 
-        return f"{code}\n價格：{round(price,2)}\n漲跌：{round(change,2)} ({round(pct,2)}%)\n原因：{reason}"
+        return (
+            f"{code}\n"
+            f"價格：{round(price,2)}\n"
+            f"漲跌：{round(change,2)} ({round(pct,2)}%)\n"
+            f"原因：{reason}"
+        )
 
     except Exception as e:
-        print("stock error:", e)
-        return "查詢失敗"
+        print("stock error:", repr(e))
+        return f"{code}：查詢失敗"
 
 
 # =========================
-# 🟢 推播 function（早報用）
+# 🟢 LINE 回覆
+# =========================
+def reply_message(reply_token, text):
+    headers = {
+        "Authorization": f"Bearer {LINE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "replyToken": reply_token,
+        "messages": [
+            {"type": "text", "text": str(text)}
+        ]
+    }
+
+    requests.post(LINE_REPLY_API, headers=headers, json=data)
+
+
+# =========================
+# 🟢 LINE 推播（早報用）
 # =========================
 def push_message(text):
     headers = {
@@ -63,29 +90,40 @@ def push_message(text):
     data = {
         "to": USER_ID,
         "messages": [
-            {"type": "text", "text": text}
+            {"type": "text", "text": str(text)}
         ]
     }
 
-    requests.post(LINE_API_PUSH, headers=headers, json=data)
+    requests.post(LINE_PUSH_API, headers=headers, json=data)
 
 
 # =========================
-# 🟢 產生早報
+# 🟢 早報股票
 # =========================
+TOP_STOCKS = ["2330", "2317", "2454", "2881", "0050"]
+
+
 def build_report():
     lines = ["📊 今日股票早報\n"]
 
-    for s in TOP_STOCKS:
+    for code in TOP_STOCKS:
         try:
-            data = yf.Ticker(s + ".TW").history(period="2d")
+            stock = f"{code}.TW"
+            data = yf.Ticker(stock).history(period="5d")
 
-            if data.empty:
+            if data is None or data.empty:
                 continue
 
-            price = data["Close"].iloc[-1]
-            change = price - data["Close"].iloc[-2]
-            pct = (change / data["Close"].iloc[-2]) * 100
+            close = data["Close"].dropna()
+
+            if len(close) < 2:
+                continue
+
+            price = close.iloc[-1]
+            prev = close.iloc[-2]
+
+            change = price - prev
+            pct = (change / prev) * 100
 
             if pct > 2:
                 reason = "🔥 強勢上漲"
@@ -95,7 +133,7 @@ def build_report():
                 reason = "📊 小幅震盪"
 
             lines.append(
-                f"{s}\n"
+                f"{code}\n"
                 f"價格：{round(price,2)}\n"
                 f"漲跌：{round(change,2)} ({round(pct,2)}%)\n"
                 f"原因：{reason}\n"
@@ -122,7 +160,8 @@ def home():
 def webhook():
 
     body = request.get_json(silent=True)
-    print("🔥 webhook:", body)
+
+    print("webhook:", body)
 
     if not body or "events" not in body:
         return "OK", 200
@@ -130,40 +169,25 @@ def webhook():
     try:
         event = body["events"][0]
 
-        # 👉 debug USER_ID（只要一次）
-        print("USER_ID:", event["source"]["userId"])
-
         msg = event["message"]["text"].strip()
         reply_token = event["replyToken"]
 
-        # 🟢 判斷邏輯
+        # 🟢 查股票
         if msg.isdigit():
-            reply_text = get_stock_price(msg)
+            result = get_stock_price(msg)
         else:
-            reply_text = "請輸入股票代號，例如 2330 / 0050"
+            result = "請輸入股票代號，例如 2330、2317、0050"
 
-        headers = {
-            "Authorization": f"Bearer {LINE_TOKEN}",
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "replyToken": reply_token,
-            "messages": [
-                {"type": "text", "text": reply_text}
-            ]
-        }
-
-        requests.post(LINE_API_REPLY, headers=headers, json=data)
+        reply_message(reply_token, result)
 
     except Exception as e:
-        print("ERROR:", e)
+        print("webhook error:", repr(e))
 
     return "OK", 200
 
 
 # =========================
-# 🟢 早報 API（給 cron-job 用）
+# 🟢 cron-job 早報 API
 # =========================
 @app.route("/push", methods=["GET"])
 def push():
