@@ -8,7 +8,7 @@ app = Flask(__name__)
 # =========================
 # 🟢 LINE 設定
 # =========================
-LINE_TOKEN = "你的Channel Access Token"
+LINE_TOKEN = "kGWl+cSBUwKrKWFmvyDCp0kPabfuiCK5Rtcc2SXPX93jJvTA6e0+X5TkySmutdCrJfCBMEP4UFnguW1SObeNdgVTCXEzGurdKUaCwjNxZHOydseQwQh9Md3EJ1OCM/QRWsN6Va56KMP32J8valpqZwdB04t89/1O/w1cDnyilFU="
 LINE_API_REPLY = "https://api.line.me/v2/bot/message/reply"
 LINE_API_PUSH = "https://api.line.me/v2/bot/message/push"
 
