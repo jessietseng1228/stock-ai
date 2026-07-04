@@ -1,11 +1,11 @@
 from flask import Flask, request
 import requests
 import os
+import yfinance as yf
 
 app = Flask(__name__)
 
-LINE_TOKEN = "填你的token"
-
+LINE_TOKEN = "kGWl+cSBUwKrKWFmvyDCp0kPabfuiCK5Rtcc2SXPX93jJvTA6e0+X5TkySmutdCrJfCBMEP4UFnguW1SObeNdgVTCXEzGurdKUaCwjNxZHOydseQwQh9Md3EJ1OCM/QRWsN6Va56KMP32J8valpqZwdB04t89/1O/w1cDnyilFU="
 LINE_API = "https://api.line.me/v2/bot/message/reply"
 
 
@@ -14,25 +14,42 @@ def home():
     return "OK", 200
 
 
+def get_price(stock):
+    try:
+        data = yf.Ticker(stock).history(period="1d")
+        price = data["Close"].iloc[-1]
+        return round(price, 2)
+    except:
+        return None
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
     body = request.get_json(silent=True)
+    print("🔥 webhook:", body)
 
-    print("🔥 webhook received:", body)
-
-    # 🟢 防呆：避免空值 crash
     if not body or "events" not in body:
         return "OK", 200
 
     try:
         event = body["events"][0]
-
-        if "message" not in event:
-            return "OK", 200
-
         reply_token = event["replyToken"]
-        user_msg = event["message"]["text"]
+        msg = event["message"]["text"]
+
+        reply_text = ""
+
+        # 🟢 股票判斷邏輯
+        if msg == "2330":
+            price = get_price("2330.TW")
+            reply_text = f"台積電：{price}"
+
+        elif msg == "006208":
+            price = get_price("006208.TW")
+            reply_text = f"富邦台50：{price}"
+
+        else:
+            reply_text = f"你輸入：{msg}"
 
         headers = {
             "Authorization": f"Bearer {LINE_TOKEN}",
@@ -42,7 +59,7 @@ def webhook():
         data = {
             "replyToken": reply_token,
             "messages": [
-                {"type": "text", "text": f"收到：{user_msg}"}
+                {"type": "text", "text": reply_text}
             ]
         }
 
