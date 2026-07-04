@@ -4,15 +4,16 @@ app = Flask(__name__)
 
 @app.route("/", methods=["POST"])
 def webhook():
-    try:
-        data = request.get_json()
-        print("收到LINE資料：", data)
+    print("收到LINE事件")
 
-        return "OK", 200   # ⭐關鍵：一定要回 200
+    # ⭐一定要立刻回應
+    return "OK", 200
 
-    except Exception as e:
-        print("錯誤：", e)
-        return "OK", 200   # ⭐避免LINE判定失敗
+
+@app.route("/", methods=["GET"])
+def home():
+    return "OK"
+
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run()
