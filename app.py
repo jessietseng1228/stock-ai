@@ -1,13 +1,23 @@
-print("🔥 APP FILE IS RUNNING")
+from flask import Flask, request
 
-from flask import Flask
 app = Flask(__name__)
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-    print("🔥 REQUEST HIT")
-    return "OK"
+    return "OK", 200
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    print("收到 LINE 訊息")
+
+    body = request.get_json()
+    print(body)
+
+    return "OK", 200
+
 
 if __name__ == "__main__":
-    print("🔥 MAIN STARTED")
-    app.run(host="0.0.0.0", port=10000)
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
