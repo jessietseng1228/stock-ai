@@ -18,36 +18,32 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     body = request.get_json()
-    print("🔥 收到LINE訊息:", body)
+    print("🔥 收到LINE:", body)
 
     try:
         event = body["events"][0]
         reply_token = event["replyToken"]
-        user_msg = event["message"]["text"]
-
-        # 👉 最簡單回覆
-        reply_text = f"你剛剛說：{user_msg}"
 
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {LINE_TOKEN}"
+            "Authorization": f"Bearer {LINE_TOKEN}",
+            "Content-Type": "application/json"
         }
 
         data = {
             "replyToken": reply_token,
             "messages": [
-                {"type": "text", "text": reply_text}
+                {
+                    "type": "text",
+                    "text": "我已收到你的訊息 👍"
+                }
             ]
         }
 
-        requests.post(LINE_API, headers=headers, json=data)
+        requests.post("https://api.line.me/v2/bot/message/reply",
+                      headers=headers,
+                      json=data)
 
     except Exception as e:
         print("ERROR:", e)
 
     return "OK", 200
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
