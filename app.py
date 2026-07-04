@@ -9,10 +9,8 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    print("收到 LINE 訊息")
-
-    body = request.get_json()
-    print(body)
+    print("🔥 收到 LINE 訊息")
+    print(request.json)
 
     return "OK", 200
 
