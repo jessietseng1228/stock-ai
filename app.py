@@ -8,112 +8,148 @@ from supabase import create_client
 app = Flask(__name__)
 
 # =========================
-# LINE
+# 📌 LINE 設定（發訊息用）
 # =========================
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
+
 # =========================
-# SUPABASE
+# 📌 Supabase 設定（存股票用）
 # =========================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
 # =========================
-# 防重複 push
+# 📌 防止短時間重複推播（避免洗訊息）
 # =========================
-_last_push = 0
+_last_push_time = 0
 
 def can_push():
-    global _last_push
+    global _last_push_time
     now = time.time()
-    if now - _last_push < 300:
+
+    # 5分鐘內只允許推一次
+    if now - _last_push_time < 300:
         return False
-    _last_push = now
+
+    _last_push_time = now
     return True
 
+
 # =========================
-# Supabase DB 操作
+# 📌 取得所有有訂閱股票的使用者
 # =========================
 def get_users():
     res = supabase.table("user_stocks").select("user_id").execute()
+
     if not res.data:
         return []
+
+    # 去重複 user
     return list(set([r["user_id"] for r in res.data]))
 
-def get_stocks(user):
-    res = supabase.table("user_stocks") \
-        .select("stock") \
-        .eq("user_id", user) \
-        .execute()
 
-    if not res.data:
+# =========================
+# 📌 取得某個使用者的股票清單
+# =========================
+def get_stocks(user):
+    try:
+        res = supabase.table("user_stocks") \
+            .select("stock_id") \
+            .eq("user_id", user) \
+            .execute()
+
+        if not res.data:
+            return []
+
+        return [r["stock_id"] for r in res.data]
+
+    except Exception as e:
+        print("❌ 讀取股票失敗:", e)
         return []
 
-    return [r["stock"] for r in res.data]
-
-def add_stock(user, stock):
-    supabase.table("user_stocks").insert({
-        "user_id": user,
-        "stock": stock
-    }).execute()
-
-def del_stock(user, stock):
-    supabase.table("user_stocks") \
-        .delete() \
-        .eq("user_id", user) \
-        .eq("stock", stock) \
-        .execute()
 
 # =========================
-# LINE push
+# 📌 新增股票
+# =========================
+def add_stock(user, stock):
+    try:
+        supabase.table("user_stocks").insert({
+            "user_id": user,
+            "stock_id": stock
+        }).execute()
+
+    except Exception as e:
+        print("❌ 新增股票失敗:", e)
+
+
+# =========================
+# 📌 刪除股票
+# =========================
+def del_stock(user, stock):
+    try:
+        supabase.table("user_stocks") \
+            .delete() \
+            .eq("user_id", user) \
+            .eq("stock_id", stock) \
+            .execute()
+
+    except Exception as e:
+        print("❌ 刪除股票失敗:", e)
+
+
+# =========================
+# 📌 發 LINE 訊息
 # =========================
 def push(user, text):
-    requests.post(
-        LINE_PUSH_API,
-        headers={
-            "Authorization": f"Bearer {LINE_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "to": user,
-            "messages": [{"type": "text", "text": text}]
-        }
-    )
+    try:
+        requests.post(
+            LINE_PUSH_API,
+            headers={
+                "Authorization": f"Bearer {LINE_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "to": user,
+                "messages": [{"type": "text", "text": text}]
+            },
+            timeout=10
+        )
+    except Exception as e:
+        print("❌ 推播失敗:", e)
+
 
 # =========================
-# 股票抓取
+# 📌 抓股票資料（yfinance）
 # =========================
 def fetch_stock(stock):
 
-    def try_fetch(period):
-        return yf.Ticker(f"{stock}.TW").history(period=period)
+    # 嘗試抓最近5天
+    data = yf.Ticker(f"{stock}.TW").history(period="5d")
 
-    data = try_fetch("5d")
     if data is not None and not data.empty:
         return data, "OK"
 
-    data = try_fetch("10d")
+    # 如果沒有，再試10天
+    data = yf.Ticker(f"{stock}.TW").history(period="10d")
+
     if data is not None and not data.empty:
         return data, "DELAY"
 
-    for _ in range(2):
-        time.sleep(1)
-        data = try_fetch("10d")
-        if data is not None and not data.empty:
-            return data, "DELAY"
-
     return None, "FAIL"
 
+
 # =========================
-# 分析
+# 📌 分析股票（漲跌 + 強弱）
 # =========================
 def analyze(stock):
     data, status = fetch_stock(stock)
 
-    if status == "FAIL":
+    if status == "FAIL" or data is None:
         return {"stock": stock, "status": "FAIL"}
 
     close = data["Close"].dropna()
@@ -121,18 +157,21 @@ def analyze(stock):
     if len(close) < 2:
         return {"stock": stock, "status": "FAIL"}
 
-    price = close.iloc[-1]
-    prev = close.iloc[-2]
+    price = float(close.iloc[-1])
+    prev = float(close.iloc[-2])
 
     change = price - prev
     pct = (change / prev) * 100
+
     pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-    grade = (
-        "🟢強勢" if pct_5d >= 3 else
-        "🔴弱勢" if pct_5d <= -3 else
-        "🟡中性"
-    )
+    # 判斷強弱
+    if pct_5d >= 3:
+        grade = "🟢強勢"
+    elif pct_5d <= -3:
+        grade = "🔴弱勢"
+    else:
+        grade = "🟡普通"
 
     return {
         "stock": stock,
@@ -144,24 +183,26 @@ def analyze(stock):
         "status": status
     }
 
+
 # =========================
-# report
+# 📌 產生報告（給 LINE 用）
 # =========================
 def build_report(user):
     stocks = get_stocks(user)
 
     if not stocks:
-        return ["⚠️ 尚未設定股票"]
+        return ["⚠️ 你還沒有加入任何股票"]
 
     results = [analyze(s) for s in stocks]
 
-    ok_any = any(r.get("status") != "FAIL" for r in results)
+    ok = any(r["status"] != "FAIL" for r in results)
 
     lines = ["📊 今日股票早報 v11\n"]
 
     for r in results:
+
         if r["status"] == "FAIL":
-            lines.append(f"{r['stock']} ⚠️資料更新中")
+            lines.append(f"{r['stock']} ⚠️資料還沒更新")
             continue
 
         tag = "⏳" if r["status"] == "DELAY" else ""
@@ -173,65 +214,59 @@ def build_report(user):
             f"5日：{round(r['pct_5d'],2)}%\n"
         )
 
-    if not ok_any:
-        return ["⚠️ 今日資料尚未更新（稍後自動刷新）"]
+    if not ok:
+        return ["⚠️ 股票資料還在更新中"]
 
     return lines
 
-# =========================
-# chunk
-# =========================
-def chunk(lines, max_len=1800):
-    out = []
-    buf = ""
-
-    for l in lines:
-        if len(buf) + len(l) > max_len:
-            out.append(buf)
-            buf = l
-        else:
-            buf += l
-
-    if buf:
-        out.append(buf)
-
-    return out
 
 # =========================
-# webhook (LINE)
+# 📌 LINE webhook（使用者輸入 add/del/list）
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    body = request.get_json(silent=True)
-    if not body:
+    try:
+        body = request.get_json(silent=True)
+        if not body:
+            return "OK"
+
+        event = body["events"][0]
+        user = event["source"]["userId"]
+        msg = event["message"]["text"].strip().lower()
+
+        # ➜ 加股票
+        if msg.startswith("add "):
+            stock = msg.replace("add ", "").strip()
+            add_stock(user, stock)
+            push(user, f"✅ 已加入 {stock}")
+
+        # ➜ 刪股票
+        elif msg.startswith("del "):
+            stock = msg.replace("del ", "").strip()
+            del_stock(user, stock)
+            push(user, f"🗑️ 已刪除 {stock}")
+
+        # ➜ 查清單
+        elif msg == "list":
+            stocks = get_stocks(user)
+            push(user, "\n".join(stocks) if stocks else "⚠️ 沒有股票")
+
         return "OK"
 
-    e = body["events"][0]
-    user = e["source"]["userId"]
-    msg = e["message"]["text"].strip().lower()
+    except Exception as e:
+        print("❌ webhook錯誤:", e)
+        return "OK"
 
-    if msg.startswith("add "):
-        add_stock(user, msg.replace("add ", ""))
-        push(user, "已加入")
-
-    elif msg.startswith("del "):
-        del_stock(user, msg.replace("del ", ""))
-        push(user, "已刪除")
-
-    elif msg == "list":
-        push(user, "\n".join(get_stocks(user)))
-
-    return "OK"
 
 # =========================
-# push job (Render cron)
+# 📌 定時推播（Render cron用）
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push_job():
 
     if not can_push():
-        return jsonify({"status": "SKIP duplicate"})
+        return jsonify({"status": "SKIP"})
 
     users = get_users()
 
@@ -244,15 +279,17 @@ def push_job():
 
     return jsonify({"status": "OK", "users": len(users)})
 
+
 # =========================
-# health check
+# 📌 健康檢查（Render用）
 # =========================
 @app.route("/")
 def home():
     return "OK"
 
+
 # =========================
-# start
+# 📌 啟動
 # =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
