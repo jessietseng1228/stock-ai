@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import yfinance as yf
-import json
+import sqlite3
 
 app = Flask(__name__)
 
@@ -14,37 +14,38 @@ LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 # =========================
-# DATA
+# SQLite DB
 # =========================
-DATA_FILE = "user_data.json"
+DB_FILE = "stocks.db"
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_stocks (
+            user_id TEXT,
+            stock TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+init_db()
 
-user_data = load_data()
+def db_execute(query, params=()):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    conn.commit()
+    conn.close()
 
-# =========================
-# cache
-# =========================
-_cache = {}
-
-def get_history(stock):
-    if stock in _cache:
-        return _cache[stock]
-
-    data = yf.Ticker(stock).history(period="5d")
-    _cache[stock] = data
-    return data
+def db_fetch(query, params=()):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 # =========================
 # LINE push
@@ -62,46 +63,42 @@ def push_message(user_id, text):
 
     r = requests.post(LINE_PUSH_API, headers=headers, json=data)
 
-    print("LINE STATUS:", r.status_code)
-    print("LINE RESPONSE:", r.text)
+    print("PUSH:", r.status_code, r.text)
 
 # =========================
-# user stock
+# stock data
 # =========================
+def get_history(stock):
+    return yf.Ticker(stock).history(period="5d")
+
+# =========================
+# DB 操作
+# =========================
+def add_stock(user_id, stock):
+    db_execute(
+        "INSERT INTO user_stocks (user_id, stock) VALUES (?, ?)",
+        (user_id, stock)
+    )
+
+def del_stock(user_id, stock):
+    db_execute(
+        "DELETE FROM user_stocks WHERE user_id=? AND stock=?",
+        (user_id, stock)
+    )
+
 def get_user_stocks(user_id):
-    return user_data.get(user_id, [])
-
-def add_stock(user_id, code):
-    if user_id not in user_data:
-        user_data[user_id] = []
-
-    if code not in user_data[user_id]:
-        user_data[user_id].append(code)
-        save_data(user_data)
-
-def del_stock(user_id, code):
-    if user_id in user_data and code in user_data[user_id]:
-        user_data[user_id].remove(code)
-        save_data(user_data)
+    rows = db_fetch(
+        "SELECT stock FROM user_stocks WHERE user_id=?",
+        (user_id,)
+    )
+    return [r[0] for r in rows]
 
 # =========================
-# 評級系統
+# 分析
 # =========================
-def get_grade(pct_5d):
-    if pct_5d >= 3:
-        return "🟢強勢"
-    elif pct_5d <= -3:
-        return "🔴弱勢"
-    else:
-        return "🟡中性"
-
-# =========================
-# 股票分析
-# =========================
-def analyze(code):
+def analyze(stock):
     try:
-        data = get_history(f"{code}.TW")
-
+        data = get_history(f"{stock}.TW")
         if data is None or data.empty:
             return None
 
@@ -117,23 +114,27 @@ def analyze(code):
 
         pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-        grade = get_grade(pct_5d)
+        if pct_5d >= 3:
+            grade = "🟢強勢"
+        elif pct_5d <= -3:
+            grade = "🔴弱勢"
+        else:
+            grade = "🟡中性"
 
         return {
-            "code": code,
+            "stock": stock,
             "price": price,
             "change": change,
             "pct": pct,
-            "grade": grade,
-            "pct_5d": pct_5d
+            "pct_5d": pct_5d,
+            "grade": grade
         }
 
-    except Exception as e:
-        print("ANALYZE ERROR:", e)
+    except:
         return None
 
 # =========================
-# report v6
+# report
 # =========================
 def build_report(user_id):
     stocks = get_user_stocks(user_id)
@@ -142,23 +143,21 @@ def build_report(user_id):
         return ["⚠️ 尚未設定股票，請先 add 2330"]
 
     results = []
-
-    for code in stocks:
-        r = analyze(code)
+    for s in stocks:
+        r = analyze(s)
         if r:
             results.append(r)
 
     if not results:
-        return ["⚠️ 無法取得股票資料"]
+        return ["⚠️ 無法取得資料"]
 
-    # 排序：強勢優先
     results.sort(key=lambda x: x["pct_5d"], reverse=True)
 
-    lines = ["📊 今日股票早報 v6\n"]
+    lines = ["📊 今日股票早報 v7\n"]
 
     for r in results:
         lines.append(
-            f"{r['code']} {r['grade']}\n"
+            f"{r['stock']} {r['grade']}\n"
             f"價格：{round(r['price'],2)}\n"
             f"漲跌：{round(r['change'],2)} ({round(r['pct'],2)}%)\n"
             f"5日：{round(r['pct_5d'],2)}%\n"
@@ -167,104 +166,94 @@ def build_report(user_id):
     return lines
 
 # =========================
-# chunk（防爆 LINE）
+# chunk
 # =========================
-def chunk_lines(lines, max_len=1800):
-    chunks = []
+def chunk(lines, max_len=1800):
+    out = []
     buf = ""
 
     for l in lines:
         if len(buf) + len(l) > max_len:
-            chunks.append(buf)
+            out.append(buf)
             buf = l
         else:
             buf += l
 
     if buf:
-        chunks.append(buf)
+        out.append(buf)
 
-    return chunks
+    return out
 
 # =========================
 # webhook
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    global user_data
-
     body = request.get_json(silent=True)
 
     if not body or "events" not in body:
         return "OK", 200
 
-    try:
-        event = body["events"][0]
+    event = body["events"][0]
 
-        user_id = event["source"]["userId"]
-        msg = event["message"]["text"].strip().lower()
-        reply_token = event["replyToken"]
+    user_id = event["source"]["userId"]
+    msg = event["message"]["text"].strip().lower()
+    reply_token = event["replyToken"]
 
-        print("USER:", user_id, "MSG:", msg)
+    print("USER:", user_id, "MSG:", msg)
 
-        if msg.startswith("add "):
-            code = msg.replace("add ", "")
-            add_stock(user_id, code)
-            push_message(user_id, f"已加入：{code}")
+    if msg.startswith("add "):
+        stock = msg.replace("add ", "")
+        add_stock(user_id, stock)
+        push_message(user_id, f"已加入：{stock}")
 
-        elif msg.startswith("del "):
-            code = msg.replace("del ", "")
-            del_stock(user_id, code)
-            push_message(user_id, f"已刪除：{code}")
+    elif msg.startswith("del "):
+        stock = msg.replace("del ", "")
+        del_stock(user_id, stock)
+        push_message(user_id, f"已刪除：{stock}")
 
-        elif msg == "list":
-            stocks = get_user_stocks(user_id)
-            push_message(user_id, "清單：\n" + "\n".join(stocks))
+    elif msg == "list":
+        stocks = get_user_stocks(user_id)
+        push_message(user_id, "清單：\n" + "\n".join(stocks))
 
-        elif msg.isdigit():
-            r = analyze(msg)
-            if r:
-                push_message(user_id, f"{msg} {round(r['price'],2)} ({round(r['pct'],2)}%)")
+    elif msg.isdigit():
+        r = analyze(msg)
+        if r:
+            push_message(user_id, f"{msg} {round(r['price'],2)} ({round(r['pct'],2)}%)")
 
-        else:
-            push_message(user_id, "指令：add / del / list / 股票代號")
-
-    except Exception as e:
-        print("WEBHOOK ERROR:", e)
+    else:
+        push_message(user_id, "指令：add / del / list / 股票代號")
 
     return "OK", 200
 
 # =========================
-# push v6
+# push
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push():
     try:
-        print("USER DATA:", user_data)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT user_id FROM user_stocks")
+        users = [r[0] for r in c.fetchall()]
+        conn.close()
 
-        if not user_data:
-            return jsonify({
-                "status": "EMPTY",
-                "message": "no users"
-            })
+        print("USERS:", users)
 
-        for user_id in user_data:
-            report = build_report(user_id)
-            chunks = chunk_lines(report)
+        if not users:
+            return jsonify({"status": "EMPTY", "users": 0})
+
+        for u in users:
+            report = build_report(u)
+            chunks = chunk(report)
 
             for c in chunks:
-                push_message(user_id, c)
+                push_message(u, c)
 
-        return jsonify({
-            "status": "OK",
-            "users": len(user_data)
-        })
+        return jsonify({"status": "OK", "users": len(users)})
 
     except Exception as e:
-        print("PUSH ERROR:", e)
-        return jsonify({
-            "status": "ERROR",
-            "message": str(e)
-        }), 500
+        return jsonify({"status": "ERROR", "message": str(e)}), 500
 
 # =========================
 # health
@@ -274,7 +263,7 @@ def home():
     return "OK", 200
 
 # =========================
-# run
+# start
 # =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
