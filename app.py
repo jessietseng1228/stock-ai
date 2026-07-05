@@ -7,21 +7,24 @@ import json
 app = Flask(__name__)
 
 # =========================
-# 🟢 LINE 設定
+# LINE
 # =========================
 LINE_TOKEN = "kGWl+cSBUwKrKWFmvyDCp0kPabfuiCK5Rtcc2SXPX93jJvTA6e0+X5TkySmutdCrJfCBMEP4UFnguW1SObeNdgVTCXEzGurdKUaCwjNxZHOydseQwQh9Md3EJ1OCM/QRWsN6Va56KMP32J8valpqZwdB04t89/1O/w1cDnyilFU="
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 # =========================
-# 🟢 永久資料（多使用者）
+# DATA
 # =========================
 DATA_FILE = "user_data.json"
 
 def load_data():
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_data(data):
@@ -31,7 +34,7 @@ def save_data(data):
 user_data = load_data()
 
 # =========================
-# 🟢 Yahoo cache
+# cache
 # =========================
 _cache = {}
 
@@ -44,23 +47,7 @@ def get_history(stock):
     return data
 
 # =========================
-# 🟢 LINE reply
-# =========================
-def reply_message(reply_token, text):
-    headers = {
-        "Authorization": f"Bearer {LINE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "replyToken": reply_token,
-        "messages": [{"type": "text", "text": str(text)}]
-    }
-
-    requests.post(LINE_REPLY_API, headers=headers, json=data)
-
-# =========================
-# 🟢 LINE push
+# LINE push
 # =========================
 def push_message(user_id, text):
     headers = {
@@ -70,47 +57,57 @@ def push_message(user_id, text):
 
     data = {
         "to": user_id,
-        "messages": [{"type": "text", "text": str(text)}]
+        "messages": [{"type": "text", "text": text}]
     }
 
-    requests.post(LINE_PUSH_API, headers=headers, json=data)
+    r = requests.post(LINE_PUSH_API, headers=headers, json=data)
+
+    print("LINE STATUS:", r.status_code)
+    print("LINE RESPONSE:", r.text)
 
 # =========================
-# 🟢 user 股票管理
+# user stock
 # =========================
 def get_user_stocks(user_id):
     return user_data.get(user_id, [])
 
 def add_stock(user_id, code):
-    stocks = user_data.get(user_id, [])
-    if code not in stocks:
-        stocks.append(code)
+    if user_id not in user_data:
+        user_data[user_id] = []
 
-    user_data[user_id] = stocks
-    save_data(user_data)
+    if code not in user_data[user_id]:
+        user_data[user_id].append(code)
+        save_data(user_data)
 
 def del_stock(user_id, code):
-    stocks = user_data.get(user_id, [])
-    if code in stocks:
-        stocks.remove(code)
-
-    user_data[user_id] = stocks
-    save_data(user_data)
+    if user_id in user_data and code in user_data[user_id]:
+        user_data[user_id].remove(code)
+        save_data(user_data)
 
 # =========================
-# 🟢 股票查詢
+# 評級系統
 # =========================
-def get_stock_price(code):
+def get_grade(pct_5d):
+    if pct_5d >= 3:
+        return "🟢強勢"
+    elif pct_5d <= -3:
+        return "🔴弱勢"
+    else:
+        return "🟡中性"
+
+# =========================
+# 股票分析
+# =========================
+def analyze(code):
     try:
-        stock = f"{code}.TW"
-        data = get_history(stock)
+        data = get_history(f"{code}.TW")
 
         if data is None or data.empty:
-            return f"{code}：查無資料"
+            return None
 
         close = data["Close"].dropna()
         if len(close) < 2:
-            return f"{code}：資料不足"
+            return None
 
         price = close.iloc[-1]
         prev = close.iloc[-2]
@@ -118,111 +115,83 @@ def get_stock_price(code):
         change = price - prev
         pct = (change / prev) * 100
 
-        if pct > 2:
-            reason = "🔥 強勢上漲"
-        elif pct < -2:
-            reason = "⚠️ 明顯回檔"
-        else:
-            reason = "📊 小幅震盪"
+        pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-        return (
-            f"{code}\n"
-            f"價格：{round(price,2)}\n"
-            f"漲跌：{round(change,2)} ({round(pct,2)}%)\n"
-            f"原因：{reason}"
-        )
+        grade = get_grade(pct_5d)
+
+        return {
+            "code": code,
+            "price": price,
+            "change": change,
+            "pct": pct,
+            "grade": grade,
+            "pct_5d": pct_5d
+        }
 
     except Exception as e:
-        print("error:", repr(e))
-        return f"{code}：查詢失敗"
+        print("ANALYZE ERROR:", e)
+        return None
 
 # =========================
-# 🟢 report（v4重點：弱勢提醒，不刪股）
+# report v6
 # =========================
 def build_report(user_id):
     stocks = get_user_stocks(user_id)
 
     if not stocks:
-        stocks = ["2330", "2317", "0050"]
+        return ["⚠️ 尚未設定股票，請先 add 2330"]
 
-    lines = ["📊 今日股票早報\n"]
+    results = []
 
     for code in stocks:
-        try:
-            stock = f"{code}.TW"
-            data = get_history(stock)
+        r = analyze(code)
+        if r:
+            results.append(r)
 
-            if data is None or data.empty:
-                continue
+    if not results:
+        return ["⚠️ 無法取得股票資料"]
 
-            close = data["Close"].dropna()
-            if len(close) < 5:
-                continue
+    # 排序：強勢優先
+    results.sort(key=lambda x: x["pct_5d"], reverse=True)
 
-            price = close.iloc[-1]
-            prev = close.iloc[-2]
+    lines = ["📊 今日股票早報 v6\n"]
 
-            change = price - prev
-            pct = (change / prev) * 100
-
-            # =========================
-            # 🟡 弱勢判斷（只標記不刪）
-            # =========================
-            pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-
-            last3 = close.iloc[-3:]
-            is_down_3 = all(last3[i] < last3[i-1] for i in range(1, 3))
-
-            is_weak = pct_5d < -5 or is_down_3
-
-            warning = " ⚠️ 弱勢提醒" if is_weak else ""
-
-            # =========================
-            # 🟢 狀態
-            # =========================
-            if pct > 2:
-                reason = "🔥 強勢上漲"
-            elif pct < -2:
-                reason = "⚠️ 明顯回檔"
-            else:
-                reason = "📊 小幅震盪"
-
-            lines.append(
-                f"{code}{warning}\n"
-                f"價格：{round(price,2)}\n"
-                f"漲跌：{round(change,2)} ({round(pct,2)}%)\n"
-                f"原因：{reason}\n"
-            )
-
-        except Exception as e:
-            print("report error:", repr(e))
+    for r in results:
+        lines.append(
+            f"{r['code']} {r['grade']}\n"
+            f"價格：{round(r['price'],2)}\n"
+            f"漲跌：{round(r['change'],2)} ({round(r['pct'],2)}%)\n"
+            f"5日：{round(r['pct_5d'],2)}%\n"
+        )
 
     return lines
 
 # =========================
-# 🟢 chunk
+# chunk（防爆 LINE）
 # =========================
 def chunk_lines(lines, max_len=1800):
     chunks = []
-    current = ""
+    buf = ""
 
-    for line in lines:
-        if len(current) + len(line) > max_len:
-            chunks.append(current)
-            current = line
+    for l in lines:
+        if len(buf) + len(l) > max_len:
+            chunks.append(buf)
+            buf = l
         else:
-            current += line
+            buf += l
 
-    if current:
-        chunks.append(current)
+    if buf:
+        chunks.append(buf)
 
     return chunks
 
 # =========================
-# 🟢 webhook
+# webhook
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    global user_data
+
     body = request.get_json(silent=True)
 
     if not body or "events" not in body:
@@ -235,44 +204,52 @@ def webhook():
         msg = event["message"]["text"].strip().lower()
         reply_token = event["replyToken"]
 
-        # ➕ add
+        print("USER:", user_id, "MSG:", msg)
+
         if msg.startswith("add "):
-            code = msg.replace("add ", "").strip()
+            code = msg.replace("add ", "")
             add_stock(user_id, code)
-            reply_message(reply_token, f"已加入：{code}")
+            push_message(user_id, f"已加入：{code}")
 
-        # ➖ del
         elif msg.startswith("del "):
-            code = msg.replace("del ", "").strip()
+            code = msg.replace("del ", "")
             del_stock(user_id, code)
-            reply_message(reply_token, f"已刪除：{code}")
+            push_message(user_id, f"已刪除：{code}")
 
-        # 📋 list
         elif msg == "list":
             stocks = get_user_stocks(user_id)
-            reply_message(reply_token, "清單：\n" + "\n".join(stocks))
+            push_message(user_id, "清單：\n" + "\n".join(stocks))
 
-        # 📊 單股查詢
         elif msg.isdigit():
-            reply_message(reply_token, get_stock_price(msg))
+            r = analyze(msg)
+            if r:
+                push_message(user_id, f"{msg} {round(r['price'],2)} ({round(r['pct'],2)}%)")
 
         else:
-            reply_message(reply_token, "指令：add / del / list / 股票代號")
+            push_message(user_id, "指令：add / del / list / 股票代號")
 
     except Exception as e:
-        print("webhook error:", repr(e))
+        print("WEBHOOK ERROR:", e)
 
     return "OK", 200
 
 # =========================
-# 🟢 push（v4：多user）
+# push v6
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push():
     try:
-        for user_id in user_data.keys():
-            lines = build_report(user_id)
-            chunks = chunk_lines(lines)
+        print("USER DATA:", user_data)
+
+        if not user_data:
+            return jsonify({
+                "status": "EMPTY",
+                "message": "no users"
+            })
+
+        for user_id in user_data:
+            report = build_report(user_id)
+            chunks = chunk_lines(report)
 
             for c in chunks:
                 push_message(user_id, c)
@@ -283,20 +260,21 @@ def push():
         })
 
     except Exception as e:
+        print("PUSH ERROR:", e)
         return jsonify({
             "status": "ERROR",
             "message": str(e)
         }), 500
 
 # =========================
-# 🟢 health check
+# health
 # =========================
 @app.route("/", methods=["GET"])
 def home():
     return "OK", 200
 
 # =========================
-# 🟢 start
+# run
 # =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
