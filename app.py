@@ -267,7 +267,7 @@ def webhook():
 # =========================
 # 🟢 push（v4：多user）
 # =========================
-@app.route("/push", methods=["POST"])
+@app.route("/push", methods=["GET", "POST"])
 def push():
     try:
         for user_id in user_data.keys():
