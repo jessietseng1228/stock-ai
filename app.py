@@ -2,36 +2,24 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import yfinance as yf
-import sqlite3
+from supabase import create_client
 import time
 
 app = Flask(__name__)
 
 # =========================
-# LINE
+# ENV（Render）
 # =========================
-LINE_TOKEN = "kGWl+cSBUwKrKWFmvyDCp0kPabfuiCK5Rtcc2SXPX93jJvTA6e0+X5TkySmutdCrJfCBMEP4UFnguW1SObeNdgVTCXEzGurdKUaCwjNxZHOydseQwQh9Md3EJ1OCM/QRWsN6Va56KMP32J8valpqZwdB04t89/1O/w1cDnyilFU="
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+LINE_TOKEN = os.getenv("LINE_TOKEN")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 # =========================
-# DB
-# =========================
-DB_FILE = "stocks.db"
-
-def ensure_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS user_stocks (
-            user_id TEXT,
-            stock TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-# =========================
-# 防重複 push
+# 🧠 防重複 push（簡化版）
 # =========================
 _last_push = 0
 
@@ -43,41 +31,43 @@ def can_push():
     _last_push = now
     return True
 
-# =========================
-# DB
-# =========================
-def db_fetch(q, p=()):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(q, p)
-    r = c.fetchall()
-    conn.close()
-    return r
 
+# =========================
+# 📊 Supabase DB
+# =========================
 def get_users():
-    return [r[0] for r in db_fetch("SELECT DISTINCT user_id FROM user_stocks")]
+    res = supabase.table("user_stocks").select("user_id").execute()
+    if not res.data:
+        return []
+    return list(set([r["user_id"] for r in res.data]))
+
 
 def get_stocks(user):
-    return [r[0] for r in db_fetch("SELECT stock FROM user_stocks WHERE user_id=?", (user,))]
+    res = supabase.table("user_stocks").select("stock").eq("user_id", user).execute()
+    if not res.data:
+        return []
+    return [r["stock"] for r in res.data]
+
 
 def add_stock(user, stock):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO user_stocks VALUES (?,?)", (user, stock))
-    conn.commit()
-    conn.close()
+    supabase.table("user_stocks").insert({
+        "user_id": user,
+        "stock": stock
+    }).execute()
+
 
 def del_stock(user, stock):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("DELETE FROM user_stocks WHERE user_id=? AND stock=?", (user, stock))
-    conn.commit()
-    conn.close()
+    supabase.table("user_stocks") \
+        .delete() \
+        .eq("user_id", user) \
+        .eq("stock", stock) \
+        .execute()
+
 
 # =========================
-# LINE push
+# 📩 LINE push（白話：發訊息）
 # =========================
-def push(user, text):
+def push_line(user, text):
     requests.post(
         LINE_PUSH_API,
         headers={
@@ -86,44 +76,33 @@ def push(user, text):
         },
         json={
             "to": user,
-            "messages": [{"type": "text", "text": text}]
+            "messages": [
+                {"type": "text", "text": text}
+            ]
         }
     )
 
+
 # =========================
-# 🧠 v9.2 智慧資料層（核心）
+# 📈 抓股票（沿用 v10）
 # =========================
 def fetch_stock(stock):
-    """
-    回傳：
-    - data
-    - status: OK / DELAY / FAIL
-    """
-
     def try_fetch(period):
         return yf.Ticker(f"{stock}.TW").history(period=period)
 
-    # 1️⃣ 5d
     data = try_fetch("5d")
     if data is not None and not data.empty:
         return data, "OK"
 
-    # 2️⃣ 10d fallback
     data = try_fetch("10d")
     if data is not None and not data.empty:
         return data, "DELAY"
 
-    # 3️⃣ retry
-    for _ in range(2):
-        time.sleep(1)
-        data = try_fetch("10d")
-        if data is not None and not data.empty:
-            return data, "DELAY"
-
     return None, "FAIL"
 
+
 # =========================
-# analyze
+# 🧠 分析（沿用 v10）
 # =========================
 def analyze(stock):
     data, status = fetch_stock(stock)
@@ -159,8 +138,9 @@ def analyze(stock):
         "status": status
     }
 
+
 # =========================
-# report v10
+# 📊 產生報告（白話：整理要推的內容）
 # =========================
 def build_report(user):
     stocks = get_stocks(user)
@@ -170,11 +150,10 @@ def build_report(user):
 
     results = [analyze(s) for s in stocks]
 
-    ok_any = any(r.get("status") != "FAIL" for r in results)
-
-    lines = ["📊 今日股票早報 v10\n"]
+    lines = ["📊 今日股票早報 v11\n"]
 
     for r in results:
+
         if r["status"] == "FAIL":
             lines.append(f"{r['stock']} ⚠️資料更新中")
             continue
@@ -188,38 +167,17 @@ def build_report(user):
             f"5日：{round(r['pct_5d'],2)}%\n"
         )
 
-    if not ok_any:
-        return ["⚠️ 今日資料尚未更新（稍後自動刷新）"]
-
     return lines
 
-# =========================
-# chunk
-# =========================
-def chunk(lines, max_len=1800):
-    out = []
-    buf = ""
-
-    for l in lines:
-        if len(buf) + len(l) > max_len:
-            out.append(buf)
-            buf = l
-        else:
-            buf += l
-
-    if buf:
-        out.append(buf)
-
-    return out
 
 # =========================
-# webhook
+# 🔥 webhook（LINE 收指令）
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    ensure_db()
 
-    body = request.get_json(silent=True)
+    body = request.get_json()
+
     if not body:
         return "OK"
 
@@ -229,23 +187,24 @@ def webhook():
 
     if msg.startswith("add "):
         add_stock(user, msg.replace("add ", ""))
-        push(user, "已加入")
+        push_line(user, "已加入")
 
     elif msg.startswith("del "):
         del_stock(user, msg.replace("del ", ""))
-        push(user, "已刪除")
+        push_line(user, "已刪除")
 
     elif msg == "list":
-        push(user, "\n".join(get_stocks(user)))
+        stocks = get_stocks(user)
+        push_line(user, "\n".join(stocks))
 
     return "OK"
 
+
 # =========================
-# push v10
+# 🚀 push（cron / 手動）
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push_job():
-    ensure_db()
 
     if not can_push():
         return jsonify({"status": "SKIP duplicate"})
@@ -257,16 +216,18 @@ def push_job():
 
     for u in users:
         report = build_report(u)
-        push(u, "\n".join(report))
+        push_line(u, "\n".join(report))
 
     return jsonify({"status": "OK", "users": len(users)})
 
+
 # =========================
-# health
+# health check
 # =========================
 @app.route("/")
 def home():
     return "OK"
+
 
 # =========================
 # start
