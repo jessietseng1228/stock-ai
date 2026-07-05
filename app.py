@@ -18,84 +18,66 @@ LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 # =========================
 DB_FILE = "stocks.db"
 
-# =========================
-# 🔥 v9：防 crash DB保險
-# =========================
 def ensure_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS user_stocks (
             user_id TEXT,
             stock TEXT
         )
     """)
-
     conn.commit()
     conn.close()
 
 # =========================
-# 防重複 push（cron safe）
+# 防重複 push
 # =========================
 _last_push = 0
 
 def can_push():
     global _last_push
     now = time.time()
-
-    if now - _last_push < 300:  # 5分鐘內不重複
+    if now - _last_push < 300:
         return False
-
     _last_push = now
     return True
 
 # =========================
-# DB helpers
+# DB
 # =========================
-def db_fetch(query, params=()):
+def db_fetch(q, p=()):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute(query, params)
-    rows = c.fetchall()
+    c.execute(q, p)
+    r = c.fetchall()
     conn.close()
-    return rows
+    return r
 
-def get_all_users():
-    rows = db_fetch("SELECT DISTINCT user_id FROM user_stocks")
-    return [r[0] for r in rows]
+def get_users():
+    return [r[0] for r in db_fetch("SELECT DISTINCT user_id FROM user_stocks")]
 
-def get_user_stocks(user_id):
-    rows = db_fetch(
-        "SELECT stock FROM user_stocks WHERE user_id=?",
-        (user_id,)
-    )
-    return [r[0] for r in rows]
+def get_stocks(user):
+    return [r[0] for r in db_fetch("SELECT stock FROM user_stocks WHERE user_id=?", (user,))]
 
-def add_stock(user_id, stock):
+def add_stock(user, stock):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute(
-        "INSERT INTO user_stocks VALUES (?, ?)",
-        (user_id, stock)
-    )
+    c.execute("INSERT INTO user_stocks VALUES (?,?)", (user, stock))
     conn.commit()
     conn.close()
 
-def del_stock(user_id, stock):
+def del_stock(user, stock):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute(
-        "DELETE FROM user_stocks WHERE user_id=? AND stock=?",
-        (user_id, stock)
-    )
+    c.execute("DELETE FROM user_stocks WHERE user_id=? AND stock=?", (user, stock))
     conn.commit()
     conn.close()
 
 # =========================
 # LINE push
 # =========================
-def push_message(user_id, text):
+def push(user, text):
     requests.post(
         LINE_PUSH_API,
         headers={
@@ -103,83 +85,111 @@ def push_message(user_id, text):
             "Content-Type": "application/json"
         },
         json={
-            "to": user_id,
+            "to": user,
             "messages": [{"type": "text", "text": text}]
         }
     )
 
 # =========================
-# Yahoo safe fetch
+# 🧠 v9.2 智慧資料層（核心）
 # =========================
-def get_stock(stock):
-    try:
-        data = yf.Ticker(f"{stock}.TW").history(period="5d")
+def fetch_stock(stock):
+    """
+    回傳：
+    - data
+    - status: OK / DELAY / FAIL
+    """
 
-        if data is None or data.empty:
-            return None
+    def try_fetch(period):
+        return yf.Ticker(f"{stock}.TW").history(period=period)
 
-        close = data["Close"].dropna()
+    # 1️⃣ 5d
+    data = try_fetch("5d")
+    if data is not None and not data.empty:
+        return data, "OK"
 
-        if len(close) < 2:
-            return None
+    # 2️⃣ 10d fallback
+    data = try_fetch("10d")
+    if data is not None and not data.empty:
+        return data, "DELAY"
 
-        price = close.iloc[-1]
-        prev = close.iloc[-2]
+    # 3️⃣ retry
+    for _ in range(2):
+        time.sleep(1)
+        data = try_fetch("10d")
+        if data is not None and not data.empty:
+            return data, "DELAY"
 
-        change = price - prev
-        pct = (change / prev) * 100
-
-        pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
-
-        grade = (
-            "🟢強勢" if pct_5d >= 3 else
-            "🔴弱勢" if pct_5d <= -3 else
-            "🟡中性"
-        )
-
-        return {
-            "stock": stock,
-            "price": price,
-            "change": change,
-            "pct": pct,
-            "pct_5d": pct_5d,
-            "grade": grade
-        }
-
-    except:
-        return None
+    return None, "FAIL"
 
 # =========================
-# report v9（保證有內容）
+# analyze
 # =========================
-def build_report(user_id):
-    stocks = get_user_stocks(user_id)
+def analyze(stock):
+    data, status = fetch_stock(stock)
+
+    if status == "FAIL":
+        return {"stock": stock, "status": "FAIL"}
+
+    close = data["Close"].dropna()
+
+    if len(close) < 2:
+        return {"stock": stock, "status": "FAIL"}
+
+    price = close.iloc[-1]
+    prev = close.iloc[-2]
+
+    change = price - prev
+    pct = (change / prev) * 100
+    pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
+
+    grade = (
+        "🟢強勢" if pct_5d >= 3 else
+        "🔴弱勢" if pct_5d <= -3 else
+        "🟡中性"
+    )
+
+    return {
+        "stock": stock,
+        "price": price,
+        "change": change,
+        "pct": pct,
+        "pct_5d": pct_5d,
+        "grade": grade,
+        "status": status
+    }
+
+# =========================
+# report v10
+# =========================
+def build_report(user):
+    stocks = get_stocks(user)
 
     if not stocks:
-        return ["⚠️ 尚未設定股票，請 add 2330"]
+        return ["⚠️ 尚未設定股票"]
 
-    lines = ["📊 今日股票早報 v9\n"]
+    results = [analyze(s) for s in stocks]
 
-    has_data = False
+    ok_any = any(r.get("status") != "FAIL" for r in results)
 
-    for s in stocks:
-        r = get_stock(s)
+    lines = ["📊 今日股票早報 v10\n"]
 
-        if not r:
-            lines.append(f"{s} ⚠️無資料")
+    for r in results:
+        if r["status"] == "FAIL":
+            lines.append(f"{r['stock']} ⚠️資料更新中")
             continue
 
-        has_data = True
+        tag = "⏳" if r["status"] == "DELAY" else ""
 
         lines.append(
-            f"{r['stock']} {r['grade']}\n"
+            f"{r['stock']} {r['grade']} {tag}\n"
             f"價格：{round(r['price'],2)}\n"
             f"漲跌：{round(r['change'],2)} ({round(r['pct'],2)}%)\n"
             f"5日：{round(r['pct_5d'],2)}%\n"
         )
 
-    if not has_data:
-        return ["⚠️ 今日所有股票暫無資料"]
+    if not ok_any:
+        return ["⚠️ 今日資料尚未更新（稍後自動刷新）"]
 
     return lines
 
@@ -213,53 +223,43 @@ def webhook():
     if not body:
         return "OK"
 
-    event = body["events"][0]
-
-    user_id = event["source"]["userId"]
-    msg = event["message"]["text"].strip().lower()
-
-    print("USER:", user_id, msg)
+    e = body["events"][0]
+    user = e["source"]["userId"]
+    msg = e["message"]["text"].strip().lower()
 
     if msg.startswith("add "):
-        add_stock(user_id, msg.replace("add ", ""))
-        push_message(user_id, "已加入")
+        add_stock(user, msg.replace("add ", ""))
+        push(user, "已加入")
 
     elif msg.startswith("del "):
-        del_stock(user_id, msg.replace("del ", ""))
-        push_message(user_id, "已刪除")
+        del_stock(user, msg.replace("del ", ""))
+        push(user, "已刪除")
 
     elif msg == "list":
-        stocks = get_user_stocks(user_id)
-        push_message(user_id, "清單:\n" + "\n".join(stocks))
+        push(user, "\n".join(get_stocks(user)))
 
     return "OK"
 
 # =========================
-# push v9（穩定版）
+# push v10
 # =========================
 @app.route("/push", methods=["GET", "POST"])
-def push():
+def push_job():
     ensure_db()
 
     if not can_push():
         return jsonify({"status": "SKIP duplicate"})
 
-    users = get_all_users()
+    users = get_users()
 
     if not users:
-        return jsonify({"status": "EMPTY", "users": 0})
+        return jsonify({"status": "EMPTY"})
 
     for u in users:
         report = build_report(u)
-        chunks = chunk(report)
+        push(u, "\n".join(report))
 
-        for c in chunks:
-            push_message(u, c)
-
-    return jsonify({
-        "status": "OK",
-        "users": len(users)
-    })
+    return jsonify({"status": "OK", "users": len(users)})
 
 # =========================
 # health
