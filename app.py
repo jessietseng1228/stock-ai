@@ -3,6 +3,7 @@ import requests
 import os
 import yfinance as yf
 import sqlite3
+import time
 
 app = Flask(__name__)
 
@@ -17,6 +18,41 @@ LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 # =========================
 DB_FILE = "stocks.db"
 
+# =========================
+# 🔥 v9：防 crash DB保險
+# =========================
+def ensure_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_stocks (
+            user_id TEXT,
+            stock TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# =========================
+# 防重複 push（cron safe）
+# =========================
+_last_push = 0
+
+def can_push():
+    global _last_push
+    now = time.time()
+
+    if now - _last_push < 300:  # 5分鐘內不重複
+        return False
+
+    _last_push = now
+    return True
+
+# =========================
+# DB helpers
+# =========================
 def db_fetch(query, params=()):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -25,8 +61,39 @@ def db_fetch(query, params=()):
     conn.close()
     return rows
 
+def get_all_users():
+    rows = db_fetch("SELECT DISTINCT user_id FROM user_stocks")
+    return [r[0] for r in rows]
+
+def get_user_stocks(user_id):
+    rows = db_fetch(
+        "SELECT stock FROM user_stocks WHERE user_id=?",
+        (user_id,)
+    )
+    return [r[0] for r in rows]
+
+def add_stock(user_id, stock):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO user_stocks VALUES (?, ?)",
+        (user_id, stock)
+    )
+    conn.commit()
+    conn.close()
+
+def del_stock(user_id, stock):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "DELETE FROM user_stocks WHERE user_id=? AND stock=?",
+        (user_id, stock)
+    )
+    conn.commit()
+    conn.close()
+
 # =========================
-# PUSH
+# LINE push
 # =========================
 def push_message(user_id, text):
     requests.post(
@@ -42,93 +109,77 @@ def push_message(user_id, text):
     )
 
 # =========================
-# 📦 重要：批次抓資料（v8核心）
+# Yahoo safe fetch
 # =========================
-stock_cache = {}
+def get_stock(stock):
+    try:
+        data = yf.Ticker(f"{stock}.TW").history(period="5d")
 
-def fetch_stock_batch(stocks):
-    """
-    一次抓全部股票，避免 N 次 request
-    """
-    for s in stocks:
-        try:
-            data = yf.Ticker(f"{s}.TW").history(period="5d")
+        if data is None or data.empty:
+            return None
 
-            if data is None or data.empty:
-                stock_cache[s] = None
-                continue
+        close = data["Close"].dropna()
 
-            close = data["Close"].dropna()
+        if len(close) < 2:
+            return None
 
-            if len(close) < 2:
-                stock_cache[s] = None
-                continue
+        price = close.iloc[-1]
+        prev = close.iloc[-2]
 
-            price = close.iloc[-1]
-            prev = close.iloc[-2]
+        change = price - prev
+        pct = (change / prev) * 100
 
-            change = price - prev
-            pct = (change / prev) * 100
-            pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
+        pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-            grade = (
-                "🟢強勢" if pct_5d >= 3 else
-                "🔴弱勢" if pct_5d <= -3 else
-                "🟡中性"
-            )
+        grade = (
+            "🟢強勢" if pct_5d >= 3 else
+            "🔴弱勢" if pct_5d <= -3 else
+            "🟡中性"
+        )
 
-            stock_cache[s] = {
-                "price": price,
-                "change": change,
-                "pct": pct,
-                "pct_5d": pct_5d,
-                "grade": grade
-            }
+        return {
+            "stock": stock,
+            "price": price,
+            "change": change,
+            "pct": pct,
+            "pct_5d": pct_5d,
+            "grade": grade
+        }
 
-        except Exception as e:
-            print("FETCH ERROR:", s, e)
-            stock_cache[s] = None
+    except:
+        return None
 
 # =========================
-# DB stocks
+# report v9（保證有內容）
 # =========================
-def get_all_users():
-    rows = db_fetch("SELECT DISTINCT user_id FROM user_stocks")
-    return [r[0] for r in rows]
+def build_report(user_id):
+    stocks = get_user_stocks(user_id)
 
-def get_user_stocks(user_id):
-    rows = db_fetch(
-        "SELECT stock FROM user_stocks WHERE user_id=?",
-        (user_id,)
-    )
-    return [r[0] for r in rows]
+    if not stocks:
+        return ["⚠️ 尚未設定股票，請 add 2330"]
 
-# =========================
-# report
-# =========================
-def build_report(user_id, stocks):
-    lines = ["📊 今日股票早報 v8\n"]
+    lines = ["📊 今日股票早報 v9\n"]
 
-    ok = False
+    has_data = False
 
     for s in stocks:
-        r = stock_cache.get(s)
+        r = get_stock(s)
 
         if not r:
             lines.append(f"{s} ⚠️無資料")
             continue
 
-        ok = True
+        has_data = True
 
         lines.append(
-            f"{s} {r['grade']}\n"
+            f"{r['stock']} {r['grade']}\n"
             f"價格：{round(r['price'],2)}\n"
             f"漲跌：{round(r['change'],2)} ({round(r['pct'],2)}%)\n"
             f"5日：{round(r['pct_5d'],2)}%\n"
         )
 
-    if not ok:
-        return ["⚠️ 今日無有效股票資料"]
+    if not has_data:
+        return ["⚠️ 今日所有股票暫無資料"]
 
     return lines
 
@@ -152,64 +203,63 @@ def chunk(lines, max_len=1800):
     return out
 
 # =========================
-# webhook（保留）
+# webhook
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    body = request.get_json(silent=True)
+    ensure_db()
 
+    body = request.get_json(silent=True)
     if not body:
         return "OK"
 
     event = body["events"][0]
+
     user_id = event["source"]["userId"]
     msg = event["message"]["text"].strip().lower()
 
-    # 只保留 debug
     print("USER:", user_id, msg)
+
+    if msg.startswith("add "):
+        add_stock(user_id, msg.replace("add ", ""))
+        push_message(user_id, "已加入")
+
+    elif msg.startswith("del "):
+        del_stock(user_id, msg.replace("del ", ""))
+        push_message(user_id, "已刪除")
+
+    elif msg == "list":
+        stocks = get_user_stocks(user_id)
+        push_message(user_id, "清單:\n" + "\n".join(stocks))
 
     return "OK"
 
 # =========================
-# push v8（核心優化）
+# push v9（穩定版）
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push():
-    try:
-        users = get_all_users()
+    ensure_db()
 
-        if not users:
-            return jsonify({"status": "EMPTY", "users": 0})
+    if not can_push():
+        return jsonify({"status": "SKIP duplicate"})
 
-        # 👉 所有股票一次抓
-        all_stocks = list(set(
-            s[0]
-            for u in users
-            for s in db_fetch("SELECT stock FROM user_stocks WHERE user_id=?", (u,))
-        ))
+    users = get_all_users()
 
-        print("FETCH STOCKS:", all_stocks)
+    if not users:
+        return jsonify({"status": "EMPTY", "users": 0})
 
-        fetch_stock_batch(all_stocks)
+    for u in users:
+        report = build_report(u)
+        chunks = chunk(report)
 
-        # 推播
-        for u in users:
-            stocks = get_user_stocks(u)
-            report = build_report(u, stocks)
-            chunks = chunk(report)
+        for c in chunks:
+            push_message(u, c)
 
-            for c in chunks:
-                push_message(u, c)
-
-        return jsonify({
-            "status": "OK",
-            "users": len(users),
-            "stocks": len(all_stocks)
-        })
-
-    except Exception as e:
-        print("PUSH ERROR:", e)
-        return jsonify({"status": "ERROR", "msg": str(e)}), 500
+    return jsonify({
+        "status": "OK",
+        "users": len(users)
+    })
 
 # =========================
 # health
@@ -219,7 +269,7 @@ def home():
     return "OK"
 
 # =========================
-# run
+# start
 # =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
