@@ -2,24 +2,27 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import yfinance as yf
-from supabase import create_client
 import time
+from supabase import create_client
 
 app = Flask(__name__)
 
 # =========================
-# ENV（Render）
+# LINE
 # =========================
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-LINE_TOKEN = os.getenv("LINE_TOKEN")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+LINE_TOKEN = os.environ.get("LINE_TOKEN")
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 # =========================
-# 🧠 防重複 push（簡化版）
+# SUPABASE
+# =========================
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# =========================
+# 防重複 push
 # =========================
 _last_push = 0
 
@@ -31,9 +34,8 @@ def can_push():
     _last_push = now
     return True
 
-
 # =========================
-# 📊 Supabase DB
+# Supabase DB 操作
 # =========================
 def get_users():
     res = supabase.table("user_stocks").select("user_id").execute()
@@ -41,20 +43,22 @@ def get_users():
         return []
     return list(set([r["user_id"] for r in res.data]))
 
-
 def get_stocks(user):
-    res = supabase.table("user_stocks").select("stock").eq("user_id", user).execute()
+    res = supabase.table("user_stocks") \
+        .select("stock") \
+        .eq("user_id", user) \
+        .execute()
+
     if not res.data:
         return []
-    return [r["stock"] for r in res.data]
 
+    return [r["stock"] for r in res.data]
 
 def add_stock(user, stock):
     supabase.table("user_stocks").insert({
         "user_id": user,
         "stock": stock
     }).execute()
-
 
 def del_stock(user, stock):
     supabase.table("user_stocks") \
@@ -63,11 +67,10 @@ def del_stock(user, stock):
         .eq("stock", stock) \
         .execute()
 
-
 # =========================
-# 📩 LINE push（白話：發訊息）
+# LINE push
 # =========================
-def push_line(user, text):
+def push(user, text):
     requests.post(
         LINE_PUSH_API,
         headers={
@@ -76,17 +79,15 @@ def push_line(user, text):
         },
         json={
             "to": user,
-            "messages": [
-                {"type": "text", "text": text}
-            ]
+            "messages": [{"type": "text", "text": text}]
         }
     )
 
-
 # =========================
-# 📈 抓股票（沿用 v10）
+# 股票抓取
 # =========================
 def fetch_stock(stock):
+
     def try_fetch(period):
         return yf.Ticker(f"{stock}.TW").history(period=period)
 
@@ -98,11 +99,16 @@ def fetch_stock(stock):
     if data is not None and not data.empty:
         return data, "DELAY"
 
+    for _ in range(2):
+        time.sleep(1)
+        data = try_fetch("10d")
+        if data is not None and not data.empty:
+            return data, "DELAY"
+
     return None, "FAIL"
 
-
 # =========================
-# 🧠 分析（沿用 v10）
+# 分析
 # =========================
 def analyze(stock):
     data, status = fetch_stock(stock)
@@ -138,9 +144,8 @@ def analyze(stock):
         "status": status
     }
 
-
 # =========================
-# 📊 產生報告（白話：整理要推的內容）
+# report
 # =========================
 def build_report(user):
     stocks = get_stocks(user)
@@ -150,10 +155,11 @@ def build_report(user):
 
     results = [analyze(s) for s in stocks]
 
+    ok_any = any(r.get("status") != "FAIL" for r in results)
+
     lines = ["📊 今日股票早報 v11\n"]
 
     for r in results:
-
         if r["status"] == "FAIL":
             lines.append(f"{r['stock']} ⚠️資料更新中")
             continue
@@ -167,17 +173,37 @@ def build_report(user):
             f"5日：{round(r['pct_5d'],2)}%\n"
         )
 
+    if not ok_any:
+        return ["⚠️ 今日資料尚未更新（稍後自動刷新）"]
+
     return lines
 
+# =========================
+# chunk
+# =========================
+def chunk(lines, max_len=1800):
+    out = []
+    buf = ""
+
+    for l in lines:
+        if len(buf) + len(l) > max_len:
+            out.append(buf)
+            buf = l
+        else:
+            buf += l
+
+    if buf:
+        out.append(buf)
+
+    return out
 
 # =========================
-# 🔥 webhook（LINE 收指令）
+# webhook (LINE)
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
-    body = request.get_json()
-
+    body = request.get_json(silent=True)
     if not body:
         return "OK"
 
@@ -187,21 +213,19 @@ def webhook():
 
     if msg.startswith("add "):
         add_stock(user, msg.replace("add ", ""))
-        push_line(user, "已加入")
+        push(user, "已加入")
 
     elif msg.startswith("del "):
         del_stock(user, msg.replace("del ", ""))
-        push_line(user, "已刪除")
+        push(user, "已刪除")
 
     elif msg == "list":
-        stocks = get_stocks(user)
-        push_line(user, "\n".join(stocks))
+        push(user, "\n".join(get_stocks(user)))
 
     return "OK"
 
-
 # =========================
-# 🚀 push（cron / 手動）
+# push job (Render cron)
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push_job():
@@ -216,10 +240,9 @@ def push_job():
 
     for u in users:
         report = build_report(u)
-        push_line(u, "\n".join(report))
+        push(u, "\n".join(report))
 
     return jsonify({"status": "OK", "users": len(users)})
-
 
 # =========================
 # health check
@@ -227,7 +250,6 @@ def push_job():
 @app.route("/")
 def home():
     return "OK"
-
 
 # =========================
 # start
