@@ -3,7 +3,13 @@ import requests
 import os
 import yfinance as yf
 import time
-from supabase import create_client
+
+from supabase_db import (
+    get_users,
+    get_stocks,
+    add_stock,
+    del_stock
+)
 
 app = Flask(__name__)
 
@@ -14,24 +20,16 @@ LINE_TOKEN = os.environ.get("LINE_TOKEN")
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
 # =========================
-# 📌 Supabase 設定（存股票用）
-# =========================
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# =========================
 # 📌 限制設定
 # =========================
-MAX_STOCKS_PER_USER = 10       # 每個使用者最多分析10檔，避免cron爆量
-MAX_LINE_TEXT_LENGTH = 4000    # LINE文字訊息保守限制
-
+MAX_STOCKS_PER_USER = 10
+MAX_LINE_TEXT_LENGTH = 4000
 
 # =========================
 # 📌 防止短時間重複推播
 # =========================
 _last_push_time = 0
+
 
 def can_push():
     global _last_push_time
@@ -49,72 +47,6 @@ def can_push():
 # =========================
 def log_error(prefix, e):
     print(f"{prefix}: {str(e)[:300]}")
-
-
-# =========================
-# 📌 取得所有有訂閱股票的使用者
-# =========================
-def get_users():
-    try:
-        res = supabase.table("user_stocks").select("user_id").execute()
-
-        if not res.data:
-            return []
-
-        return list(set([r["user_id"] for r in res.data]))
-
-    except Exception as e:
-        log_error("❌ 讀取使用者失敗", e)
-        return []
-
-
-# =========================
-# 📌 取得某個使用者的股票清單
-# =========================
-def get_stocks(user):
-    try:
-        res = supabase.table("user_stocks") \
-            .select("stock_id") \
-            .eq("user_id", user) \
-            .execute()
-
-        if not res.data:
-            return []
-
-        return [r["stock_id"] for r in res.data]
-
-    except Exception as e:
-        log_error("❌ 讀取股票失敗", e)
-        return []
-
-
-# =========================
-# 📌 新增股票
-# =========================
-def add_stock(user, stock):
-    try:
-        supabase.table("user_stocks").insert({
-            "user_id": user,
-            "stock_id": stock
-        }).execute()
-
-    except Exception as e:
-        log_error("❌ 新增股票失敗", e)
-
-
-# =========================
-# 📌 刪除股票
-# =========================
-def del_stock(user, stock):
-    try:
-        supabase.table("user_stocks") \
-            .delete() \
-            .eq("user_id", user) \
-            .eq("stock_id", stock) \
-            .execute()
-
-    except Exception as e:
-        log_error("❌ 刪除股票失敗", e)
 
 
 # =========================
@@ -151,7 +83,6 @@ def push(user, text):
 def fetch_stock(stock):
     try:
         ticker = yf.Ticker(f"{stock}.TW")
-
         data = ticker.history(period="5d")
 
         if data is not None and not data.empty:
@@ -224,7 +155,7 @@ def build_report(user):
 
     ok = any(r["status"] != "FAIL" for r in results)
 
-    lines = ["📊 今日股票早報 v12\n"]
+    lines = ["📊 今日股票早報 v14\n"]
 
     if total_count > MAX_STOCKS_PER_USER:
         lines.append(f"⚠️ 追蹤股票共 {total_count} 檔，本次先顯示前 {MAX_STOCKS_PER_USER} 檔\n")
@@ -318,7 +249,6 @@ def push_job():
             push(u, text)
             success += 1
 
-        # Cron只需要很小的回應，避免超過限制
         return jsonify({"status": "OK", "users": success})
 
     except Exception as e:
