@@ -24,13 +24,13 @@ def get_all_user_ids() -> List[str]:
 def get_user_stocks(user_id: str) -> List[str]:
     res = (
         supabase.table("user_stocks")
-        .select("symbol")
+        .select("stock_id")
         .eq("user_id", user_id)
-        .order("symbol")
+        .order("stock_id")
         .execute()
     )
     rows = res.data or []
-    return [r["symbol"] for r in rows if r.get("symbol")]
+    return [r["stock_id"] for r in rows if r.get("stock_id")]
 
 
 def add_user_stock(user_id: str, symbol: str) -> bool:
@@ -40,9 +40,9 @@ def add_user_stock(user_id: str, symbol: str) -> bool:
 
     exists = (
         supabase.table("user_stocks")
-        .select("id")
+        .select("user_id")
         .eq("user_id", user_id)
-        .eq("symbol", symbol)
+        .eq("stock_id", symbol)
         .limit(1)
         .execute()
     )
@@ -52,7 +52,7 @@ def add_user_stock(user_id: str, symbol: str) -> bool:
 
     supabase.table("user_stocks").insert({
         "user_id": user_id,
-        "symbol": symbol
+        "stock_id": symbol
     }).execute()
 
     return True
@@ -66,7 +66,7 @@ def delete_user_stock(user_id: str, symbol: str) -> bool:
     supabase.table("user_stocks") \
         .delete() \
         .eq("user_id", user_id) \
-        .eq("symbol", symbol) \
+        .eq("stock_id", symbol) \
         .execute()
 
     return True
@@ -90,7 +90,7 @@ def get_user_state(user_id: str) -> Optional[str]:
 def set_user_state(user_id: str, state: str) -> None:
     existing = (
         supabase.table("user_state")
-        .select("id")
+        .select("user_id")
         .eq("user_id", user_id)
         .limit(1)
         .execute()
