@@ -13,7 +13,6 @@ app = Flask(__name__)
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
 LINE_PUSH_API = "https://api.line.me/v2/bot/message/push"
 
-
 # =========================
 # 📌 Supabase 設定（存股票用）
 # =========================
@@ -22,9 +21,15 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# =========================
+# 📌 限制設定
+# =========================
+MAX_STOCKS_PER_USER = 10       # 每個使用者最多分析10檔，避免cron爆量
+MAX_LINE_TEXT_LENGTH = 4000    # LINE文字訊息保守限制
+
 
 # =========================
-# 📌 防止短時間重複推播（避免洗訊息）
+# 📌 防止短時間重複推播
 # =========================
 _last_push_time = 0
 
@@ -32,7 +37,6 @@ def can_push():
     global _last_push_time
     now = time.time()
 
-    # 5分鐘內只允許推一次
     if now - _last_push_time < 300:
         return False
 
@@ -41,16 +45,27 @@ def can_push():
 
 
 # =========================
+# 📌 安全錯誤輸出，避免log爆量
+# =========================
+def log_error(prefix, e):
+    print(f"{prefix}: {str(e)[:300]}")
+
+
+# =========================
 # 📌 取得所有有訂閱股票的使用者
 # =========================
 def get_users():
-    res = supabase.table("user_stocks").select("user_id").execute()
+    try:
+        res = supabase.table("user_stocks").select("user_id").execute()
 
-    if not res.data:
+        if not res.data:
+            return []
+
+        return list(set([r["user_id"] for r in res.data]))
+
+    except Exception as e:
+        log_error("❌ 讀取使用者失敗", e)
         return []
-
-    # 去重複 user
-    return list(set([r["user_id"] for r in res.data]))
 
 
 # =========================
@@ -69,7 +84,7 @@ def get_stocks(user):
         return [r["stock_id"] for r in res.data]
 
     except Exception as e:
-        print("❌ 讀取股票失敗:", e)
+        log_error("❌ 讀取股票失敗", e)
         return []
 
 
@@ -84,7 +99,7 @@ def add_stock(user, stock):
         }).execute()
 
     except Exception as e:
-        print("❌ 新增股票失敗:", e)
+        log_error("❌ 新增股票失敗", e)
 
 
 # =========================
@@ -99,7 +114,7 @@ def del_stock(user, stock):
             .execute()
 
     except Exception as e:
-        print("❌ 刪除股票失敗:", e)
+        log_error("❌ 刪除股票失敗", e)
 
 
 # =========================
@@ -107,7 +122,10 @@ def del_stock(user, stock):
 # =========================
 def push(user, text):
     try:
-        requests.post(
+        if len(text) > MAX_LINE_TEXT_LENGTH:
+            text = text[:MAX_LINE_TEXT_LENGTH] + "\n\n⚠️ 內容過長，已截斷"
+
+        res = requests.post(
             LINE_PUSH_API,
             headers={
                 "Authorization": f"Bearer {LINE_TOKEN}",
@@ -119,32 +137,40 @@ def push(user, text):
             },
             timeout=10
         )
+
+        if res.status_code >= 400:
+            print(f"❌ LINE推播失敗 status={res.status_code}, body={res.text[:300]}")
+
     except Exception as e:
-        print("❌ 推播失敗:", e)
+        log_error("❌ 推播失敗", e)
 
 
 # =========================
 # 📌 抓股票資料（yfinance）
 # =========================
 def fetch_stock(stock):
+    try:
+        ticker = yf.Ticker(f"{stock}.TW")
 
-    # 嘗試抓最近5天
-    data = yf.Ticker(f"{stock}.TW").history(period="5d")
+        data = ticker.history(period="5d")
 
-    if data is not None and not data.empty:
-        return data, "OK"
+        if data is not None and not data.empty:
+            return data, "OK"
 
-    # 如果沒有，再試10天
-    data = yf.Ticker(f"{stock}.TW").history(period="10d")
+        data = ticker.history(period="10d")
 
-    if data is not None and not data.empty:
-        return data, "DELAY"
+        if data is not None and not data.empty:
+            return data, "DELAY"
 
-    return None, "FAIL"
+        return None, "FAIL"
+
+    except Exception as e:
+        log_error(f"❌ yfinance抓取失敗 {stock}", e)
+        return None, "FAIL"
 
 
 # =========================
-# 📌 分析股票（漲跌 + 強弱）
+# 📌 分析股票
 # =========================
 def analyze(stock):
     data, status = fetch_stock(stock)
@@ -162,10 +188,8 @@ def analyze(stock):
 
     change = price - prev
     pct = (change / prev) * 100
-
     pct_5d = (close.iloc[-1] - close.iloc[0]) / close.iloc[0] * 100
 
-    # 判斷強弱
     if pct_5d >= 3:
         grade = "🟢強勢"
     elif pct_5d <= -3:
@@ -193,25 +217,30 @@ def build_report(user):
     if not stocks:
         return ["⚠️ 你還沒有加入任何股票"]
 
+    total_count = len(stocks)
+    stocks = stocks[:MAX_STOCKS_PER_USER]
+
     results = [analyze(s) for s in stocks]
 
     ok = any(r["status"] != "FAIL" for r in results)
 
-    lines = ["📊 今日股票早報 v11\n"]
+    lines = ["📊 今日股票早報 v12\n"]
+
+    if total_count > MAX_STOCKS_PER_USER:
+        lines.append(f"⚠️ 追蹤股票共 {total_count} 檔，本次先顯示前 {MAX_STOCKS_PER_USER} 檔\n")
 
     for r in results:
-
         if r["status"] == "FAIL":
-            lines.append(f"{r['stock']} ⚠️資料還沒更新")
+            lines.append(f"{r['stock']} ⚠️資料還沒更新\n")
             continue
 
         tag = "⏳" if r["status"] == "DELAY" else ""
 
         lines.append(
             f"{r['stock']} {r['grade']} {tag}\n"
-            f"價格：{round(r['price'],2)}\n"
-            f"漲跌：{round(r['change'],2)} ({round(r['pct'],2)}%)\n"
-            f"5日：{round(r['pct_5d'],2)}%\n"
+            f"價格：{round(r['price'], 2)}\n"
+            f"漲跌：{round(r['change'], 2)} ({round(r['pct'], 2)}%)\n"
+            f"5日：{round(r['pct_5d'], 2)}%\n"
         )
 
     if not ok:
@@ -221,41 +250,49 @@ def build_report(user):
 
 
 # =========================
-# 📌 LINE webhook（使用者輸入 add/del/list）
+# 📌 LINE webhook
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-
     try:
         body = request.get_json(silent=True)
-        if not body:
+
+        if not body or "events" not in body or len(body["events"]) == 0:
             return "OK"
 
         event = body["events"][0]
         user = event["source"]["userId"]
+
+        # 只處理文字訊息，避免貼圖/圖片造成錯誤
+        if event.get("type") != "message" or event.get("message", {}).get("type") != "text":
+            return "OK"
+
         msg = event["message"]["text"].strip().lower()
 
-        # ➜ 加股票
         if msg.startswith("add "):
             stock = msg.replace("add ", "").strip()
             add_stock(user, stock)
             push(user, f"✅ 已加入 {stock}")
 
-        # ➜ 刪股票
         elif msg.startswith("del "):
             stock = msg.replace("del ", "").strip()
             del_stock(user, stock)
             push(user, f"🗑️ 已刪除 {stock}")
 
-        # ➜ 查清單
         elif msg == "list":
             stocks = get_stocks(user)
-            push(user, "\n".join(stocks) if stocks else "⚠️ 沒有股票")
+
+            if stocks:
+                text = "📋 我的自選清單\n" + "\n".join(stocks)
+            else:
+                text = "⚠️ 沒有股票"
+
+            push(user, text)
 
         return "OK"
 
     except Exception as e:
-        print("❌ webhook錯誤:", e)
+        log_error("❌ webhook錯誤", e)
         return "OK"
 
 
@@ -264,20 +301,29 @@ def webhook():
 # =========================
 @app.route("/push", methods=["GET", "POST"])
 def push_job():
+    try:
+        if not can_push():
+            return jsonify({"status": "SKIP"})
 
-    if not can_push():
-        return jsonify({"status": "SKIP"})
+        users = get_users()
 
-    users = get_users()
+        if not users:
+            return jsonify({"status": "EMPTY"})
 
-    if not users:
-        return jsonify({"status": "EMPTY"})
+        success = 0
 
-    for u in users:
-        report = build_report(u)
-        push(u, "\n".join(report))
+        for u in users:
+            report = build_report(u)
+            text = "\n".join(report)
+            push(u, text)
+            success += 1
 
-    return jsonify({"status": "OK", "users": len(users)})
+        # Cron只需要很小的回應，避免超過限制
+        return jsonify({"status": "OK", "users": success})
+
+    except Exception as e:
+        log_error("❌ push_job錯誤", e)
+        return jsonify({"status": "ERROR"}), 200
 
 
 # =========================
