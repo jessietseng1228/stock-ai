@@ -5,10 +5,10 @@ import yfinance as yf
 import time
 
 from supabase_db import (
-    get_users,
-    get_stocks,
-    add_stock,
-    del_stock
+    get_all_user_ids,
+    get_user_stocks,
+    add_user_stock,
+    delete_user_stock
 )
 
 app = Flask(__name__)
@@ -143,7 +143,7 @@ def analyze(stock):
 # 📌 產生報告（給 LINE 用）
 # =========================
 def build_report(user):
-    stocks = get_stocks(user)
+    stocks = get_user_stocks(user)
 
     if not stocks:
         return ["⚠️ 你還沒有加入任何股票"]
@@ -152,7 +152,6 @@ def build_report(user):
     stocks = stocks[:MAX_STOCKS_PER_USER]
 
     results = [analyze(s) for s in stocks]
-
     ok = any(r["status"] != "FAIL" for r in results)
 
     lines = ["📊 今日股票早報 v14\n"]
@@ -194,7 +193,6 @@ def webhook():
         event = body["events"][0]
         user = event["source"]["userId"]
 
-        # 只處理文字訊息，避免貼圖/圖片造成錯誤
         if event.get("type") != "message" or event.get("message", {}).get("type") != "text":
             return "OK"
 
@@ -202,16 +200,24 @@ def webhook():
 
         if msg.startswith("add "):
             stock = msg.replace("add ", "").strip()
-            add_stock(user, stock)
-            push(user, f"✅ 已加入 {stock}")
+            ok = add_user_stock(user, stock)
+
+            if ok:
+                push(user, f"✅ 已加入 {stock.upper()}")
+            else:
+                push(user, "⚠️ 股票代號不可空白")
 
         elif msg.startswith("del "):
             stock = msg.replace("del ", "").strip()
-            del_stock(user, stock)
-            push(user, f"🗑️ 已刪除 {stock}")
+            ok = delete_user_stock(user, stock)
+
+            if ok:
+                push(user, f"🗑️ 已刪除 {stock.upper()}")
+            else:
+                push(user, "⚠️ 股票代號不可空白")
 
         elif msg == "list":
-            stocks = get_stocks(user)
+            stocks = get_user_stocks(user)
 
             if stocks:
                 text = "📋 我的自選清單\n" + "\n".join(stocks)
@@ -231,12 +237,13 @@ def webhook():
 # 📌 定時推播（Render cron用）
 # =========================
 @app.route("/push", methods=["GET", "POST"])
+@app.route("/cron", methods=["GET", "POST"])
 def push_job():
     try:
         if not can_push():
             return jsonify({"status": "SKIP"})
 
-        users = get_users()
+        users = get_all_user_ids()
 
         if not users:
             return jsonify({"status": "EMPTY"})
