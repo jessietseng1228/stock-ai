@@ -240,8 +240,9 @@ def webhook():
 @app.route("/cron", methods=["GET", "POST"])
 def push_job():
     try:
-        if not can_push():
-            return "SKIP", 200
+        #cron test mark
+        #if not can_push():
+        #    return "SKIP", 200
 
         users = get_all_user_ids()
 
