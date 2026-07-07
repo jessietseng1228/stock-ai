@@ -28,6 +28,18 @@ def parse_stock_ids(text: str) -> List[str]:
     return stock_ids
 
 
+
+
+# v15.1 相容名稱：app.py 使用 parse_symbols / normalize_symbol，
+# 資料庫欄位仍維持 stock_id，不需要改 Supabase 表結構。
+def normalize_symbol(symbol: str) -> str:
+    return normalize_stock_id(symbol)
+
+
+def parse_symbols(text: str) -> List[str]:
+    return parse_stock_ids(text)
+
+
 def get_all_user_ids() -> List[str]:
     """取得所有有自選股的 LINE user_id，供 Cron 推播。"""
     res = supabase.table("user_stocks").select("user_id").execute()

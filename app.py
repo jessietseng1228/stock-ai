@@ -36,12 +36,12 @@ def is_delete_all_text(text: str) -> bool:
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Stock AI Assistant v15 is running."
+    return "Stock AI Assistant v15.1 is running."
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v15"})
+    return jsonify({"status": "ok", "version": "v15.1"})
 
 
 @app.route("/callback", methods=["POST"])
