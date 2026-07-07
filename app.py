@@ -82,16 +82,24 @@ def push(user, text):
 # =========================
 def fetch_stock(stock):
     try:
-        ticker = yf.Ticker(f"{stock}.TW")
-        data = ticker.history(period="5d")
+        symbols = [
+            f"{stock}.TW",
+            f"{stock}.TWO",
+            stock
+        ]
 
-        if data is not None and not data.empty:
-            return data, "OK"
+        for symbol in symbols:
+            ticker = yf.Ticker(symbol)
 
-        data = ticker.history(period="10d")
+            data = ticker.history(period="5d")
 
-        if data is not None and not data.empty:
-            return data, "DELAY"
+            if data is not None and not data.empty:
+                return data, "OK"
+
+            data = ticker.history(period="10d")
+
+            if data is not None and not data.empty:
+                return data, "DELAY"
 
         return None, "FAIL"
 
