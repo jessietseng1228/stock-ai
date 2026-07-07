@@ -241,26 +241,23 @@ def webhook():
 def push_job():
     try:
         if not can_push():
-            return jsonify({"status": "SKIP"})
+            return "SKIP", 200
 
         users = get_all_user_ids()
 
         if not users:
-            return jsonify({"status": "EMPTY"})
-
-        success = 0
+            return "EMPTY", 200
 
         for u in users:
             report = build_report(u)
             text = "\n".join(report)
             push(u, text)
-            success += 1
 
-        return jsonify({"status": "OK", "users": success})
+        return "OK", 200
 
     except Exception as e:
         log_error("❌ push_job錯誤", e)
-        return jsonify({"status": "ERROR"}), 200
+        return "ERROR", 200
 
 
 # =========================
