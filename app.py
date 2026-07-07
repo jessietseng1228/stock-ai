@@ -28,6 +28,7 @@ CMD_TOP5 = {"TOP5可買", "🔥 TOP5可買", "top5", "action=top5"}
 CMD_ANALYZE = {"個股分析", "📈 個股分析", "analyze", "action=analyze"}
 CMD_CANCEL = {"取消", "cancel", "離開"}
 CMD_DELETE_ALL = {"ALL", "DEL ALL", "DELETE ALL", "全部刪除", "清空", "清空自選"}
+ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_CANCEL
 
 
 def is_delete_all_text(text: str) -> bool:
@@ -36,15 +37,16 @@ def is_delete_all_text(text: str) -> bool:
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Stock AI Assistant v15.1 is running."
+    return "Stock AI Assistant v15.2 is running."
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v15.1"})
+    return jsonify({"status": "ok", "version": "v15.2"})
 
 
 @app.route("/callback", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def callback():
     body = request.get_json(silent=True) or {}
     events = body.get("events", [])
@@ -67,12 +69,46 @@ def handle_line_event(event: dict) -> None:
         reply_text(reply_token, "請使用下方選單，或輸入股票代號。")
         return
 
+    # v15.2：指令優先於等待狀態，避免卡在「加股票」時把「刪除股票」誤加入。
     if text in CMD_CANCEL:
         clear_user_state(user_id)
         reply_text(reply_token, "已取消目前操作。")
         return
 
-    # 1) 先處理等待狀態：加股票 / 刪股票 / 個股分析
+    if text in CMD_MORNING:
+        clear_user_state(user_id)
+        stocks = get_user_stocks(user_id)
+        reply_text(reply_token, build_morning_report(stocks))
+        return
+
+    if text in CMD_LIST:
+        clear_user_state(user_id)
+        stocks = get_user_stocks(user_id)
+        reply_text(reply_token, build_watchlist_report(stocks))
+        return
+
+    if text in CMD_ADD:
+        set_user_state(user_id, STATE_ADD)
+        reply_text(reply_token, "請輸入股票代號，可一次多檔，例如：\n2330 2317 2454\n\n若要取消，請輸入：取消")
+        return
+
+    if text in CMD_DELETE:
+        set_user_state(user_id, STATE_DELETE)
+        reply_text(reply_token, "請輸入要刪除的股票代號，可一次多檔，例如：\n2330 2317\n\n若要清空，請輸入：全部刪除\n若要取消，請輸入：取消")
+        return
+
+    if text in CMD_TOP5:
+        clear_user_state(user_id)
+        stocks = get_user_stocks(user_id)
+        reply_text(reply_token, build_top5_report(stocks))
+        return
+
+    if text in CMD_ANALYZE:
+        set_user_state(user_id, STATE_ANALYZE)
+        reply_text(reply_token, "請輸入要分析的股票代號，例如：2330\n\n若要取消，請輸入：取消")
+        return
+
+    # 2) 再處理等待狀態：加股票 / 刪股票 / 個股分析
     state = get_user_state(user_id)
 
     if state == STATE_ADD:
@@ -82,7 +118,7 @@ def handle_line_event(event: dict) -> None:
             clear_user_state(user_id)
             reply_text(reply_token, "✅ 已加入：\n" + "\n".join(added))
         else:
-            reply_text(reply_token, "股票代號格式不正確，請重新輸入，例如：2330 2317 2454")
+            reply_text(reply_token, "股票代號格式不正確，請重新輸入，例如：2330 2317 2454\n\n若要取消，請輸入：取消")
         return
 
     if state == STATE_DELETE:
@@ -104,37 +140,6 @@ def handle_line_event(event: dict) -> None:
     if state == STATE_ANALYZE:
         clear_user_state(user_id)
         reply_text(reply_token, build_single_analysis(text))
-        return
-
-    # 2) Rich Menu 指令
-    if text in CMD_MORNING:
-        stocks = get_user_stocks(user_id)
-        reply_text(reply_token, build_morning_report(stocks))
-        return
-
-    if text in CMD_LIST:
-        stocks = get_user_stocks(user_id)
-        reply_text(reply_token, build_watchlist_report(stocks))
-        return
-
-    if text in CMD_ADD:
-        set_user_state(user_id, STATE_ADD)
-        reply_text(reply_token, "請輸入股票代號，可一次多檔，例如：\n2330 2317 2454")
-        return
-
-    if text in CMD_DELETE:
-        set_user_state(user_id, STATE_DELETE)
-        reply_text(reply_token, "請輸入要刪除的股票代號，可一次多檔，例如：\n2330 2317\n\n若要清空，請輸入：全部刪除")
-        return
-
-    if text in CMD_TOP5:
-        stocks = get_user_stocks(user_id)
-        reply_text(reply_token, build_top5_report(stocks))
-        return
-
-    if text in CMD_ANALYZE:
-        set_user_state(user_id, STATE_ANALYZE)
-        reply_text(reply_token, "請輸入要分析的股票代號，例如：2330")
         return
 
     # 3) 使用者直接輸入股票代號，也支援直接分析

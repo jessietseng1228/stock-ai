@@ -13,7 +13,18 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def normalize_stock_id(stock_id: str) -> str:
-    return (stock_id or "").strip().upper().replace(" ", "")
+    """資料庫內統一存台股代號，例如 2330、0050、006208。"""
+    s = (stock_id or "").strip().upper().replace(" ", "")
+    if not s:
+        return ""
+
+    # 允許使用者輸入 2330.TW / 2330.TWO，但 DB 仍只存 2330
+    s = s.replace(".TW", "").replace(".TWO", "")
+
+    # 目前先只接受台股常見 4~6 碼數字，避免把「刪除股票」誤加入
+    if re.fullmatch(r"\d{4,6}", s):
+        return s
+    return ""
 
 
 def parse_stock_ids(text: str) -> List[str]:
@@ -28,10 +39,8 @@ def parse_stock_ids(text: str) -> List[str]:
     return stock_ids
 
 
+# v15 相容名稱：app.py 可用 parse_symbols / normalize_symbol
 
-
-# v15.1 相容名稱：app.py 使用 parse_symbols / normalize_symbol，
-# 資料庫欄位仍維持 stock_id，不需要改 Supabase 表結構。
 def normalize_symbol(symbol: str) -> str:
     return normalize_stock_id(symbol)
 
