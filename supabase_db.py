@@ -12,20 +12,20 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def normalize_symbol(symbol: str) -> str:
-    return (symbol or "").strip().upper().replace(" ", "")
+def normalize_stock_id(stock_id: str) -> str:
+    return (stock_id or "").strip().upper().replace(" ", "")
 
 
-def parse_symbols(text: str) -> List[str]:
+def parse_stock_ids(text: str) -> List[str]:
     """支援：2330 2317、2330,2317、2330/2317、換行輸入。"""
     raw = (text or "").upper()
     parts = re.split(r"[\s,，、/／;；]+", raw)
-    symbols: List[str] = []
+    stock_ids: List[str] = []
     for p in parts:
-        s = normalize_symbol(p)
-        if s and s not in symbols:
-            symbols.append(s)
-    return symbols
+        s = normalize_stock_id(p)
+        if s and s not in stock_ids:
+            stock_ids.append(s)
+    return stock_ids
 
 
 def get_all_user_ids() -> List[str]:
@@ -38,57 +38,57 @@ def get_all_user_ids() -> List[str]:
 def get_user_stocks(user_id: str) -> List[str]:
     res = (
         supabase.table("user_stocks")
-        .select("symbol")
+        .select("stock_id")
         .eq("user_id", user_id)
-        .order("symbol")
+        .order("stock_id")
         .execute()
     )
     rows = res.data or []
-    return [r["symbol"] for r in rows if r.get("symbol")]
+    return [r["stock_id"] for r in rows if r.get("stock_id")]
 
 
-def add_user_stock(user_id: str, symbol: str) -> bool:
-    symbol = normalize_symbol(symbol)
-    if not symbol:
+def add_user_stock(user_id: str, stock_id: str) -> bool:
+    stock_id = normalize_stock_id(stock_id)
+    if not stock_id:
         return False
 
     exists = (
         supabase.table("user_stocks")
         .select("id")
         .eq("user_id", user_id)
-        .eq("symbol", symbol)
+        .eq("stock_id", stock_id)
         .limit(1)
         .execute()
     )
     if exists.data:
         return True
 
-    supabase.table("user_stocks").insert({"user_id": user_id, "symbol": symbol}).execute()
+    supabase.table("user_stocks").insert({"user_id": user_id, "stock_id": stock_id}).execute()
     return True
 
 
-def add_user_stocks(user_id: str, symbols: List[str]) -> List[str]:
+def add_user_stocks(user_id: str, stock_ids: List[str]) -> List[str]:
     added: List[str] = []
-    for symbol in symbols:
-        s = normalize_symbol(symbol)
+    for stock_id in stock_ids:
+        s = normalize_stock_id(stock_id)
         if s and add_user_stock(user_id, s):
             added.append(s)
     return added
 
 
-def delete_user_stock(user_id: str, symbol: str) -> bool:
-    symbol = normalize_symbol(symbol)
-    if not symbol:
+def delete_user_stock(user_id: str, stock_id: str) -> bool:
+    stock_id = normalize_stock_id(stock_id)
+    if not stock_id:
         return False
 
-    supabase.table("user_stocks").delete().eq("user_id", user_id).eq("symbol", symbol).execute()
+    supabase.table("user_stocks").delete().eq("user_id", user_id).eq("stock_id", stock_id).execute()
     return True
 
 
-def delete_user_stocks(user_id: str, symbols: List[str]) -> List[str]:
+def delete_user_stocks(user_id: str, stock_ids: List[str]) -> List[str]:
     deleted: List[str] = []
-    for symbol in symbols:
-        s = normalize_symbol(symbol)
+    for stock_id in stock_ids:
+        s = normalize_stock_id(stock_id)
         if s and delete_user_stock(user_id, s):
             deleted.append(s)
     return deleted
