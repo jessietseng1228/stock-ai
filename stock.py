@@ -244,7 +244,7 @@ def get_stock_data(symbol: str, force_refresh: bool = False) -> Optional[Dict]:
             return cached[1]
 
     data = None
-    for getter in (_get_stock_data_by_yfinance, _get_stock_data_by_yahoo_chart):
+    for getter in (_get_stock_data_by_yahoo_chart, _get_stock_data_by_yfinance):
         try:
             data = getter(yf_symbol)
             if data:
@@ -304,8 +304,8 @@ def _is_top5_eligible(data: Dict) -> bool:
 
 def top5_candidates(symbols: Optional[List[str]] = None) -> List[Dict]:
     """
-    TOP5 可買：v16.1 起改為「市場候選池」綜合評分，不再使用自選股。
-    symbols 參數保留是為了相容舊的呼叫方式，但實際不採用使用者自選清單。
+    舊版相容函式。v17 的 LINE TOP5 已改由 market_scan.py 預掃描＋Supabase 結果產生，
+    這裡只保留給舊程式呼叫，不再作為正式 TOP5 來源。
     """
     rows = []
     seen = set()

@@ -25,7 +25,7 @@ from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v17.0"
+VERSION = "v17.1"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -59,6 +59,7 @@ def home():
 
 
 @app.route("/health", methods=["GET"])
+@app.route("/status", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": VERSION})
 
@@ -197,8 +198,12 @@ def manual_push_morning_report():
 
 @app.route("/scan_top5", methods=["GET", "POST"])
 def manual_scan_top5():
-    """手動重算 v17 市場 TOP5。可給 Render Cron 08:30 呼叫。"""
-    result = scan_market_top5(save=True)
+    """手動重算 v17 市場 TOP5。可給 Render Cron 08:30 呼叫。可用 ?limit=50 降低測試量。"""
+    try:
+        limit = int(request.args.get("limit", "0") or 0)
+    except Exception:
+        limit = 0
+    result = scan_market_top5(limit=limit or None, save=True)
     return jsonify({
         "status": "ok",
         "version": VERSION,
@@ -210,6 +215,13 @@ def manual_scan_top5():
         "top5": [x.get("symbol") for x in result.get("top5", [])],
     })
 
+
+
+
+@app.route("/top5", methods=["GET"])
+def top5_text():
+    """瀏覽器快速測試 TOP5，不需透過 LINE。"""
+    return build_top5_report(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @app.route("/top5_status", methods=["GET"])
 def top5_status():
