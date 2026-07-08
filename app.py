@@ -1,4 +1,6 @@
 from flask import Flask, request, jsonify
+import threading
+from datetime import datetime
 
 from line import reply_text, push_text, reply_flex, push_flex, get_event_text, get_user_id
 from supabase_db import (
@@ -25,7 +27,7 @@ from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v17.2"
+VERSION = "v17.3"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -40,6 +42,54 @@ CMD_ANALYZE = {"個股分析", "📈 個股分析", "analyze", "action=analyze"}
 CMD_CANCEL = {"取消", "cancel", "離開"}
 CMD_DELETE_ALL = {"ALL", "DEL ALL", "DELETE ALL", "全部刪除", "清空", "清空自選"}
 ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_CANCEL
+
+# v17.3: Render Cron 測試逾時修正。
+# /scan_top5 仍保留手動同步測試；Cron 請改打 /scan_top5_cron，先快速回應，再背景掃描。
+SCAN_JOB_LOCK = threading.Lock()
+SCAN_JOB_STATUS = {
+    "running": False,
+    "last_start": None,
+    "last_end": None,
+    "last_status": None,
+    "last_error": None,
+}
+
+def _run_scan_job(limit: int | None = None) -> None:
+    with SCAN_JOB_LOCK:
+        if SCAN_JOB_STATUS.get("running"):
+            return
+        SCAN_JOB_STATUS.update({
+            "running": True,
+            "last_start": datetime.now().isoformat(timespec="seconds"),
+            "last_end": None,
+            "last_status": "running",
+            "last_error": None,
+        })
+    try:
+        result = scan_market_top5(limit=limit, save=True)
+        with SCAN_JOB_LOCK:
+            SCAN_JOB_STATUS.update({
+                "running": False,
+                "last_end": datetime.now().isoformat(timespec="seconds"),
+                "last_status": "ok",
+                "last_error": None,
+                "last_result": {
+                    "scan_date": result.get("scan_date"),
+                    "universe_count": result.get("universe_count"),
+                    "candidate_count": result.get("candidate_count"),
+                    "scored_count": result.get("scored_count"),
+                    "saved_count": result.get("saved_count"),
+                },
+            })
+    except Exception as exc:
+        with SCAN_JOB_LOCK:
+            SCAN_JOB_STATUS.update({
+                "running": False,
+                "last_end": datetime.now().isoformat(timespec="seconds"),
+                "last_status": "error",
+                "last_error": str(exc)[:300],
+            })
+
 
 
 def is_delete_all_text(text: str) -> bool:
@@ -223,7 +273,32 @@ def manual_scan_top5():
 
 @app.route("/top5_status", methods=["GET"])
 def top5_status():
-    return jsonify({"status": "ok", "version": VERSION, **market_top5_status()})
+    return jsonify({"status": "ok", "version": VERSION, "scan_job": SCAN_JOB_STATUS, **market_top5_status()})
+
+
+@app.route("/scan_top5_cron", methods=["GET", "POST"])
+def scan_top5_cron():
+    """Render Cron 專用：立即回應，背景掃描，避免 Cron 測試逾時。"""
+    try:
+        limit = int(request.args.get("limit", "0") or 0)
+    except Exception:
+        limit = 0
+
+    with SCAN_JOB_LOCK:
+        if SCAN_JOB_STATUS.get("running"):
+            return (
+                f"ok version={VERSION} job=scan_top5_cron status=already_running\n",
+                200,
+                {"Content-Type": "text/plain; charset=utf-8"},
+            )
+
+    thread = threading.Thread(target=_run_scan_job, kwargs={"limit": limit or None}, daemon=True)
+    thread.start()
+    return (
+        f"ok version={VERSION} job=scan_top5_cron status=accepted limit={limit or 'default'}\n",
+        200,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
 
 
 @app.route("/top5", methods=["GET"])
