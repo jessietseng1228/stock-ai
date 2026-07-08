@@ -25,7 +25,7 @@ from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v17.1"
+VERSION = "v17.2"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -174,8 +174,12 @@ def handle_line_event(event: dict) -> None:
 
 @app.route("/cron", methods=["GET", "POST"])
 def cron_push_morning_report():
-    """Render Cron 每天 09:00 呼叫這支。先掃描 TOP5，再推播早報。"""
-    scan_info = scan_market_top5(save=True)
+    """Render Cron 每天 09:00 呼叫這支。
+
+    v17.2：這支只負責推播早報，不再重新掃描 TOP5。
+    TOP5 請由 08:30 的 /scan_top5 預先產生，避免免費 Render 重複大量運算，
+    也避免 Cron Response 過大被判定失敗。
+    """
     user_ids = get_all_user_ids()
     sent = 0
 
@@ -187,8 +191,7 @@ def cron_push_morning_report():
         push_flex(user_id, alt, flex, fallback)
         sent += 1
 
-    # 只回傳簡短 JSON，避免 Render Cron 輸出過大。
-    return jsonify({"status": "ok", "version": VERSION, "sent": sent, "top5_scan": {"universe_count": scan_info.get("universe_count"), "candidate_count": scan_info.get("candidate_count"), "scored_count": scan_info.get("scored_count"), "saved_count": scan_info.get("saved_count")}})
+    return jsonify({"status": "ok", "version": VERSION, "job": "morning_push", "sent": sent})
 
 
 @app.route("/push", methods=["GET", "POST"])
@@ -198,34 +201,34 @@ def manual_push_morning_report():
 
 @app.route("/scan_top5", methods=["GET", "POST"])
 def manual_scan_top5():
-    """手動重算 v17 市場 TOP5。可給 Render Cron 08:30 呼叫。可用 ?limit=50 降低測試量。"""
-    try:
-        limit = int(request.args.get("limit", "0") or 0)
-    except Exception:
-        limit = 0
-    result = scan_market_top5(limit=limit or None, save=True)
+    """手動或 Render Cron 重算 v17 市場 TOP5。
+
+    預設只回傳極短 JSON，避免 Render Cron 出現「輸出過大」。
+    若要看明細，請使用 /top5 或 /top5_status。
+    可用 /scan_top5?limit=30 控制候選檔數。
+    """
+    limit = request.args.get("limit", default=None, type=int)
+    result = scan_market_top5(limit=limit or 300, save=True)
     return jsonify({
         "status": "ok",
         "version": VERSION,
+        "job": "scan_top5",
         "scan_date": result.get("scan_date"),
         "universe_count": result.get("universe_count"),
         "candidate_count": result.get("candidate_count"),
         "scored_count": result.get("scored_count"),
         "saved_count": result.get("saved_count"),
-        "top5": [x.get("symbol") for x in result.get("top5", [])],
     })
 
-
-
-
-@app.route("/top5", methods=["GET"])
-def top5_text():
-    """瀏覽器快速測試 TOP5，不需透過 LINE。"""
-    return build_top5_report(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @app.route("/top5_status", methods=["GET"])
 def top5_status():
     return jsonify({"status": "ok", "version": VERSION, **market_top5_status()})
+
+
+@app.route("/top5", methods=["GET"])
+def top5_page():
+    return build_top5_report(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 if __name__ == "__main__":

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
-import os
 import re
 import time
 import requests
@@ -14,8 +13,8 @@ TAIPEI_TZ = timezone(timedelta(hours=8))
 
 # v17：每天 Cron 預先掃描市場，不再由使用者點擊時即時掃描。
 # 預設先取成交值前 300 檔，再做 AI Score，避免 1800 檔逐檔打 Yahoo 造成 Render / LINE timeout。
-TOP_TURNOVER_LIMIT = int(os.getenv("TOP_TURNOVER_LIMIT", "120"))
-SCAN_SLEEP_SECONDS = float(os.getenv("SCAN_SLEEP_SECONDS", "0.02"))
+TOP_TURNOVER_LIMIT = 300
+SCAN_SLEEP_SECONDS = 0.03
 
 
 def today_taipei() -> str:
@@ -83,33 +82,6 @@ def fetch_twse_quotes() -> List[Dict]:
     return rows
 
 
-def fetch_twse_openapi_quotes() -> List[Dict]:
-    """TWSE OpenAPI 備援：上市個股日收盤行情。"""
-    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        data_rows = resp.json()
-    except Exception:
-        return []
-
-    rows: List[Dict] = []
-    for item in data_rows if isinstance(data_rows, list) else []:
-        code = str(item.get("Code") or item.get("證券代號") or "").strip()
-        name = str(item.get("Name") or item.get("證券名稱") or "").strip()
-        if not _is_common_stock(code, name):
-            continue
-        rows.append({
-            "symbol": code,
-            "name": name,
-            "market": "TWSE",
-            "turnover": _to_number(item.get("TradeValue") or item.get("成交金額")),
-            "volume": _to_number(item.get("TradeVolume") or item.get("成交股數")),
-            "close": _to_number(item.get("ClosingPrice") or item.get("收盤價")),
-        })
-    return rows
-
-
 def fetch_tpex_quotes() -> List[Dict]:
     """抓上櫃每日行情。失敗時回傳空清單，不中斷流程。"""
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
@@ -138,10 +110,7 @@ def fetch_tpex_quotes() -> List[Dict]:
 
 
 def get_market_universe() -> List[Dict]:
-    twse_rows = fetch_twse_quotes()
-    if not twse_rows:
-        twse_rows = fetch_twse_openapi_quotes()
-    rows = twse_rows + fetch_tpex_quotes()
+    rows = fetch_twse_quotes() + fetch_tpex_quotes()
     seen = set()
     clean: List[Dict] = []
     for row in rows:
@@ -154,7 +123,7 @@ def get_market_universe() -> List[Dict]:
     return sorted(clean, key=lambda x: x.get("turnover", 0), reverse=True)
 
 
-def scan_market_top5(limit: Optional[int] = None, save: bool = True) -> Dict:
+def scan_market_top5(limit: int = TOP_TURNOVER_LIMIT, save: bool = True) -> Dict:
     """
     v17 主流程：
     1. 抓上市櫃行情
@@ -164,8 +133,7 @@ def scan_market_top5(limit: Optional[int] = None, save: bool = True) -> Dict:
     """
     scan_date = today_taipei()
     universe = get_market_universe()
-    effective_limit = max(1, int(limit or TOP_TURNOVER_LIMIT))
-    candidates = universe[:effective_limit]
+    candidates = universe[: max(1, int(limit or TOP_TURNOVER_LIMIT))]
     rows: List[Dict] = []
 
     for q in candidates:
