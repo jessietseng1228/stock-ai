@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 
-from line import reply_text, push_text, get_event_text, get_user_id
+from line import reply_text, push_text, reply_flex, push_flex, get_event_text, get_user_id
 from supabase_db import (
     get_all_user_ids,
     get_user_stocks,
@@ -12,9 +12,19 @@ from supabase_db import (
     clear_user_state,
     parse_symbols,
 )
-from report import build_morning_report, build_watchlist_report, build_top5_report, build_single_analysis
+from report import (
+    build_morning_report,
+    build_watchlist_report,
+    build_top5_report,
+    build_single_analysis,
+    build_morning_flex,
+    build_top5_flex,
+    build_single_flex,
+)
 
 app = Flask(__name__)
+
+VERSION = "v16.0"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -35,14 +45,21 @@ def is_delete_all_text(text: str) -> bool:
     return (text or "").strip().upper() in CMD_DELETE_ALL
 
 
+def parse_postback_symbol(text: str) -> str:
+    if not text.startswith("action=analyze_symbol"):
+        return ""
+    parts = text.split("symbol=", 1)
+    return parts[1].strip() if len(parts) == 2 else ""
+
+
 @app.route("/", methods=["GET"])
 def home():
-    return "Stock AI Assistant v15.2 is running."
+    return f"Stock AI Assistant {VERSION} is running."
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "version": "v15.2"})
+    return jsonify({"status": "ok", "version": VERSION})
 
 
 @app.route("/callback", methods=["POST"])
@@ -50,10 +67,8 @@ def health():
 def callback():
     body = request.get_json(silent=True) or {}
     events = body.get("events", [])
-
     for event in events:
         handle_line_event(event)
-
     return jsonify({"status": "ok"})
 
 
@@ -66,10 +81,17 @@ def handle_line_event(event: dict) -> None:
         return
 
     if not text:
-        reply_text(reply_token, "請使用下方選單，或輸入股票代號。")
+        reply_text(reply_token, "請使用下方選單，或輸入股票代號 / 股票名稱。")
         return
 
-    # v15.2：指令優先於等待狀態，避免卡在「加股票」時把「刪除股票」誤加入。
+    symbol_from_button = parse_postback_symbol(text)
+    if symbol_from_button:
+        clear_user_state(user_id)
+        alt, flex, fallback = build_single_flex(symbol_from_button)
+        reply_flex(reply_token, alt, flex, fallback)
+        return
+
+    # 指令優先於等待狀態，避免卡在「加股票」時把「刪除股票」誤加入。
     if text in CMD_CANCEL:
         clear_user_state(user_id)
         reply_text(reply_token, "已取消目前操作。")
@@ -78,7 +100,8 @@ def handle_line_event(event: dict) -> None:
     if text in CMD_MORNING:
         clear_user_state(user_id)
         stocks = get_user_stocks(user_id)
-        reply_text(reply_token, build_morning_report(stocks))
+        alt, flex, fallback = build_morning_flex(stocks)
+        reply_flex(reply_token, alt, flex, fallback)
         return
 
     if text in CMD_LIST:
@@ -100,15 +123,15 @@ def handle_line_event(event: dict) -> None:
     if text in CMD_TOP5:
         clear_user_state(user_id)
         stocks = get_user_stocks(user_id)
-        reply_text(reply_token, build_top5_report(stocks))
+        alt, flex, fallback = build_top5_flex(stocks)
+        reply_flex(reply_token, alt, flex, fallback)
         return
 
     if text in CMD_ANALYZE:
         set_user_state(user_id, STATE_ANALYZE)
-        reply_text(reply_token, "請輸入要分析的股票代號，例如：2330\n\n若要取消，請輸入：取消")
+        reply_text(reply_token, "請輸入要分析的股票代號或股票名稱，例如：2330、台積電、TSMC\n\n若要取消，請輸入：取消")
         return
 
-    # 2) 再處理等待狀態：加股票 / 刪股票 / 個股分析
     state = get_user_state(user_id)
 
     if state == STATE_ADD:
@@ -139,11 +162,13 @@ def handle_line_event(event: dict) -> None:
 
     if state == STATE_ANALYZE:
         clear_user_state(user_id)
-        reply_text(reply_token, build_single_analysis(text))
+        alt, flex, fallback = build_single_flex(text)
+        reply_flex(reply_token, alt, flex, fallback)
         return
 
-    # 3) 使用者直接輸入股票代號，也支援直接分析
-    reply_text(reply_token, build_single_analysis(text))
+    # 使用者直接輸入股票代號 / 股票名稱，也支援直接分析。
+    alt, flex, fallback = build_single_flex(text)
+    reply_flex(reply_token, alt, flex, fallback)
 
 
 @app.route("/cron", methods=["GET", "POST"])
@@ -156,11 +181,17 @@ def cron_push_morning_report():
         stocks = get_user_stocks(user_id)
         if not stocks:
             continue
-        report = build_morning_report(stocks)
-        push_text(user_id, report)
+        alt, flex, fallback = build_morning_flex(stocks)
+        push_flex(user_id, alt, flex, fallback)
         sent += 1
 
-    return jsonify({"status": "ok", "sent": sent})
+    # 只回傳簡短 JSON，避免 Render Cron 輸出過大。
+    return jsonify({"status": "ok", "version": VERSION, "sent": sent})
+
+
+@app.route("/push", methods=["GET", "POST"])
+def manual_push_morning_report():
+    return cron_push_morning_report()
 
 
 if __name__ == "__main__":
