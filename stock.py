@@ -45,6 +45,38 @@ STOCK_NAMES = {
     "5880": "合庫金",
     "6505": "台塑化",
     "6669": "緯穎",
+    "2379": "瑞昱",
+    "2308": "台達電",
+    "2327": "國巨",
+    "3017": "奇鋐",
+    "3443": "創意",
+    "5274": "信驊",
+    "6488": "環球晶",
+    "2376": "技嘉",
+    "2356": "英業達",
+    "2345": "智邦",
+    "2395": "研華",
+    "2449": "京元電子",
+    "2618": "長榮航",
+    "2606": "裕民",
+    "2610": "華航",
+    "1216": "統一",
+    "1301": "台塑",
+    "1303": "南亞",
+    "1326": "台化",
+    "2002": "中鋼",
+    "2207": "和泰車",
+    "2301": "光寶科",
+    "2412": "中華電",
+    "3045": "台灣大",
+    "8046": "南電",
+    "8069": "元太",
+    "8299": "群聯",
+    "2360": "致茂",
+    "6274": "台燿",
+    "6239": "力成",
+    "1519": "華城",
+    "1605": "華新",
 }
 
 ALIASES = {
@@ -63,6 +95,19 @@ ALIASES = {
     "富邦金": "2881", "國泰金": "2882", "玉山金": "2884",
     "元大金": "2885", "兆豐金": "2886", "中信金": "2891", "第一金": "2892",
 }
+
+
+# v16.1：TOP5 可買使用的全市場候選池。
+# 先放台灣高成交值/權值/AI/半導體/電子/金融/航運等常見熱門股，
+# 之後 v17 可改成自動抓上市櫃成交值排行，再動態擴大掃描。
+MARKET_CANDIDATES = [
+    "2330", "2317", "2454", "2382", "3231", "6669", "3661", "3034", "3711", "2303",
+    "2357", "2379", "2308", "2327", "3017", "3443", "5274", "6488", "2376", "2356",
+    "2345", "2395", "3008", "2408", "2344", "2449", "2618", "2603", "2609", "2615",
+    "2606", "2610", "2881", "2882", "2884", "2885", "2886", "2891", "2892", "5871",
+    "5880", "1216", "1301", "1303", "1326", "2002", "2207", "2301", "2412", "3045",
+    "4904", "6505", "8046", "8069", "8299", "2360", "6274", "6239", "1519", "1605",
+]
 
 
 def resolve_symbol(symbol: str) -> str:
@@ -236,10 +281,43 @@ def analyze_stock(symbol: str) -> str:
     )
 
 
-def top5_candidates(symbols: List[str]) -> List[Dict]:
+def _is_top5_eligible(data: Dict) -> bool:
+    """TOP5 可買的基本過濾：避免把流動性太低或短線過弱的股票排進來。"""
+    if not data:
+        return False
+
+    price = data.get("price", 0) or 0
+    volume = data.get("volume", 0) or 0
+    change_pct = data.get("change_pct", 0) or 0
+    five_pct = data.get("five_pct", 0) or 0
+
+    if price <= 0:
+        return False
+    if volume and volume < 300_000:
+        return False
+    if change_pct <= -6:
+        return False
+    if five_pct <= -12:
+        return False
+    return True
+
+
+def top5_candidates(symbols: Optional[List[str]] = None) -> List[Dict]:
+    """
+    TOP5 可買：v16.1 起改為「市場候選池」綜合評分，不再使用自選股。
+    symbols 參數保留是為了相容舊的呼叫方式，但實際不採用使用者自選清單。
+    """
     rows = []
-    for symbol in symbols:
-        data = get_stock_data(symbol, force_refresh=True)
-        if data:
+    seen = set()
+
+    for symbol in MARKET_CANDIDATES:
+        code = display_symbol(symbol)
+        if code in seen:
+            continue
+        seen.add(code)
+
+        data = get_stock_data(code, force_refresh=True)
+        if data and _is_top5_eligible(data):
             rows.append(data)
+
     return sorted(rows, key=lambda x: x.get("score", 0), reverse=True)[:5]

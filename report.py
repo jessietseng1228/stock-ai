@@ -1,5 +1,6 @@
 from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
+from market_scan import get_saved_or_scan_top5, today_taipei
 from ai import ai_comment
 
 DISCLAIMER = "提醒：AI分數是量價模型，不是投資建議。"
@@ -69,15 +70,12 @@ def build_morning_report(symbols: List[str]) -> str:
     return "\n".join(lines)
 
 
-def build_top5_report(symbols: List[str]) -> str:
-    if not symbols:
-        return "🔥 TOP5可買\n目前尚未加入自選股，無法評分。"
-
-    top5 = top5_candidates(symbols)
+def build_top5_report(symbols: List[str] = None) -> str:
+    top5 = get_saved_or_scan_top5(auto_scan=False)
     if not top5:
-        return "🔥 TOP5可買\n目前查不到可評分資料。"
+        return "🔥 TOP5可買\n今天還沒有市場掃描結果。請先執行 /scan_top5，或等早上 Cron 自動產生。"
 
-    lines = ["🔥 今日 TOP5｜即時重新評分", "────────────"]
+    lines = [f"🔥 今日 TOP5可買｜全市場預掃描 {today_taipei()}", "────────────"]
     for idx, data in enumerate(top5, 1):
         arrow = _arrow(data)
         reasons = "、".join(data.get("reasons", []))
@@ -88,7 +86,7 @@ def build_top5_report(symbols: List[str]) -> str:
             f"   理由：{reasons}"
         )
 
-    lines.append("\n提醒：Top5 會即時重新抓資料與評分，不直接沿用今日早報。")
+    lines.append("\n提醒：Top5 由 v17 每日市場掃描結果產生，不使用自選清單。")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
@@ -151,15 +149,15 @@ def build_morning_flex(symbols: List[str]) -> Tuple[str, Dict, str]:
     return "股票 AI 今日早報", flex, fallback
 
 
-def build_top5_flex(symbols: List[str]) -> Tuple[str, Dict, str]:
-    fallback = build_top5_report(symbols)
-    top5 = top5_candidates(symbols)
+def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
+    fallback = build_top5_report()
+    top5 = get_saved_or_scan_top5(auto_scan=False)
     if not top5:
         return "今日 TOP5", {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [_text(fallback)]}}, fallback
 
     contents = [
-        _text("🔥 今日 TOP5", "xl", "bold"),
-        _text("即時重新抓資料與評分，不沿用早報", "xs", color="#666666"),
+        _text("🔥 今日 TOP5可買", "xl", "bold"),
+        _text(f"全市場成交值篩選＋AI評分｜{today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))

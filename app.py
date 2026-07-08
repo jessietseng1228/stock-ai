@@ -21,10 +21,11 @@ from report import (
     build_top5_flex,
     build_single_flex,
 )
+from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v16.0"
+VERSION = "v17.0"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -122,8 +123,7 @@ def handle_line_event(event: dict) -> None:
 
     if text in CMD_TOP5:
         clear_user_state(user_id)
-        stocks = get_user_stocks(user_id)
-        alt, flex, fallback = build_top5_flex(stocks)
+        alt, flex, fallback = build_top5_flex()
         reply_flex(reply_token, alt, flex, fallback)
         return
 
@@ -173,7 +173,8 @@ def handle_line_event(event: dict) -> None:
 
 @app.route("/cron", methods=["GET", "POST"])
 def cron_push_morning_report():
-    """Render Cron 每天 09:00 呼叫這支。"""
+    """Render Cron 每天 09:00 呼叫這支。先掃描 TOP5，再推播早報。"""
+    scan_info = scan_market_top5(save=True)
     user_ids = get_all_user_ids()
     sent = 0
 
@@ -186,12 +187,33 @@ def cron_push_morning_report():
         sent += 1
 
     # 只回傳簡短 JSON，避免 Render Cron 輸出過大。
-    return jsonify({"status": "ok", "version": VERSION, "sent": sent})
+    return jsonify({"status": "ok", "version": VERSION, "sent": sent, "top5_scan": {"universe_count": scan_info.get("universe_count"), "candidate_count": scan_info.get("candidate_count"), "scored_count": scan_info.get("scored_count"), "saved_count": scan_info.get("saved_count")}})
 
 
 @app.route("/push", methods=["GET", "POST"])
 def manual_push_morning_report():
     return cron_push_morning_report()
+
+
+@app.route("/scan_top5", methods=["GET", "POST"])
+def manual_scan_top5():
+    """手動重算 v17 市場 TOP5。可給 Render Cron 08:30 呼叫。"""
+    result = scan_market_top5(save=True)
+    return jsonify({
+        "status": "ok",
+        "version": VERSION,
+        "scan_date": result.get("scan_date"),
+        "universe_count": result.get("universe_count"),
+        "candidate_count": result.get("candidate_count"),
+        "scored_count": result.get("scored_count"),
+        "saved_count": result.get("saved_count"),
+        "top5": [x.get("symbol") for x in result.get("top5", [])],
+    })
+
+
+@app.route("/top5_status", methods=["GET"])
+def top5_status():
+    return jsonify({"status": "ok", "version": VERSION, **market_top5_status()})
 
 
 if __name__ == "__main__":

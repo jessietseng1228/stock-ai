@@ -151,3 +151,97 @@ def set_user_state(user_id: str, state: str) -> None:
 
 def clear_user_state(user_id: str) -> None:
     supabase.table("user_state").delete().eq("user_id", user_id).execute()
+
+
+# =========================
+# v17 market TOP5 results
+# =========================
+
+def save_market_top5(scan_date: str, rows: list) -> int:
+    """儲存每日市場掃描結果。需要先建立 market_top5_results table。"""
+    if not scan_date:
+        return 0
+
+    # 同一天重算時先清掉，避免舊排名殘留。
+    try:
+        supabase.table("market_top5_results").delete().eq("scan_date", scan_date).execute()
+    except Exception:
+        return 0
+
+    payload = []
+    for rank, data in enumerate(rows or [], 1):
+        symbol = normalize_stock_id(str(data.get("symbol", "")))
+        if not symbol:
+            continue
+        payload.append({
+            "scan_date": scan_date,
+            "rank": rank,
+            "symbol": symbol,
+            "name": data.get("name") or "",
+            "score": int(data.get("score", 0) or 0),
+            "stars": data.get("stars") or "",
+            "trend": data.get("trend") or "",
+            "price": float(data.get("price", 0) or 0),
+            "change_pct": float(data.get("change_pct", 0) or 0),
+            "five_pct": float(data.get("five_pct", 0) or 0),
+            "support": float(data.get("support", 0) or 0),
+            "resistance": float(data.get("resistance", 0) or 0),
+            "stop_loss": float(data.get("stop_loss", 0) or 0),
+            "turnover": float(data.get("turnover", 0) or 0),
+            "reasons": data.get("reasons") or [],
+        })
+
+    if payload:
+        supabase.table("market_top5_results").insert(payload).execute()
+    return len(payload)
+
+
+def get_market_top5(scan_date: str, limit: int = 5) -> list:
+    try:
+        res = (
+            supabase.table("market_top5_results")
+            .select("*")
+            .eq("scan_date", scan_date)
+            .order("rank")
+            .limit(limit)
+            .execute()
+        )
+    except Exception:
+        return []
+
+    rows = []
+    for r in res.data or []:
+        symbol = normalize_stock_id(str(r.get("symbol", "")))
+        title = f"{symbol} {r.get('name')}" if r.get("name") else symbol
+        rows.append({
+            "symbol": symbol,
+            "name": r.get("name") or "",
+            "title": title,
+            "score": int(r.get("score", 0) or 0),
+            "stars": r.get("stars") or "",
+            "trend": r.get("trend") or "",
+            "price": float(r.get("price", 0) or 0),
+            "change": 0,
+            "change_pct": float(r.get("change_pct", 0) or 0),
+            "five_pct": float(r.get("five_pct", 0) or 0),
+            "support": float(r.get("support", 0) or 0),
+            "resistance": float(r.get("resistance", 0) or 0),
+            "stop_loss": float(r.get("stop_loss", 0) or 0),
+            "turnover": float(r.get("turnover", 0) or 0),
+            "reasons": r.get("reasons") or [],
+            "scan_date": scan_date,
+        })
+    return rows
+
+
+def get_market_top5_meta(scan_date: str) -> dict:
+    try:
+        res = (
+            supabase.table("market_top5_results")
+            .select("id,scan_date")
+            .eq("scan_date", scan_date)
+            .execute()
+        )
+        return {"has_result": bool(res.data), "count": len(res.data or [])}
+    except Exception as e:
+        return {"has_result": False, "count": 0, "error": str(e)}
