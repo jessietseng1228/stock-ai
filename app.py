@@ -25,7 +25,7 @@ from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v18.0.0-stable"
+VERSION = "v18.0.1-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"

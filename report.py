@@ -75,7 +75,8 @@ def build_top5_report(symbols: List[str] = None) -> str:
     if not top5:
         return "🔥 TOP5可買\n今天還沒有市場掃描結果。請先執行 /scan_top5，或等早上 Cron 自動產生。"
 
-    lines = [f"🔥 今日 TOP5可買｜全市場預掃描 {today_taipei()}", "────────────"]
+    result_date = top5[0].get("scan_date") or today_taipei()
+    lines = [f"🔥 TOP5可買｜掃描日期 {result_date}", "────────────"]
     for idx, data in enumerate(top5, 1):
         arrow = _arrow(data)
         reasons = "、".join(data.get("reasons", []))
@@ -157,7 +158,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("🔥 今日 TOP5可買", "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 2.0｜{today_taipei()}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 2.0｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))

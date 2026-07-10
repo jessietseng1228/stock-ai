@@ -234,6 +234,28 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
     return rows
 
 
+
+def get_latest_market_top5(limit: int = 5) -> list:
+    """取得最近一次成功掃描結果，供跨日、週末與休市日使用。"""
+    try:
+        date_res = (
+            supabase.table("market_top5_results")
+            .select("scan_date")
+            .order("scan_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return []
+
+    if not date_res.data:
+        return []
+
+    latest_date = str(date_res.data[0].get("scan_date") or "")
+    if not latest_date:
+        return []
+    return get_market_top5(latest_date, limit=limit)
+
 def get_market_top5_meta(scan_date: str) -> dict:
     try:
         res = (

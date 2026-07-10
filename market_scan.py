@@ -11,7 +11,7 @@ import requests
 import yfinance as yf
 
 from stock import _build_data_from_values, display_symbol
-from supabase_db import save_market_top5, get_market_top5, get_market_top5_meta
+from supabase_db import save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta
 from ai import SCORE_VERSION
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
@@ -303,6 +303,12 @@ def get_saved_or_scan_top5(auto_scan: bool = False) -> List[Dict]:
     rows = get_market_top5(scan_date, limit=5)
     if rows:
         return rows
+
+    # 跨午夜、週末或休市日：顯示最近一次成功掃描，不再誤導使用者重跑。
+    latest_rows = get_latest_market_top5(limit=5)
+    if latest_rows:
+        return latest_rows
+
     if auto_scan:
         result = scan_market_top5(save=True)
         return result.get("top5", [])
