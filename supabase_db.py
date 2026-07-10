@@ -267,3 +267,71 @@ def get_market_top5_meta(scan_date: str) -> dict:
         return {"has_result": bool(res.data), "count": len(res.data or [])}
     except Exception as e:
         return {"has_result": False, "count": 0, "error": str(e)}
+
+# =========================
+# v18.1 AI recommendation performance history
+# =========================
+
+def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dict:
+    """保存實際展示的 Top5。相同 scan_date + symbol 使用 upsert，不重複新增。"""
+    payload = []
+    for rank, data in enumerate((rows or [])[:max(1, limit)], 1):
+        symbol = normalize_stock_id(str(data.get("symbol", "")))
+        if not symbol:
+            continue
+        factors = data.get("factor_scores") or {}
+        payload.append({
+            "scan_date": scan_date,
+            "symbol": symbol,
+            "name": data.get("name") or "",
+            "market": data.get("market") or "TWSE",
+            "rank": rank,
+            "score_version": data.get("score_version") or "AI Score 2.0",
+            "ai_score": int(data.get("score", 0) or 0),
+            "trend_score": int(factors.get("trend", 0) or 0),
+            "momentum_score": int(factors.get("momentum", 0) or 0),
+            "volume_score": int(factors.get("volume", 0) or 0),
+            "risk_score": int(factors.get("risk", 0) or 0),
+            "position_score": int(factors.get("position", 0) or 0),
+            "entry_price": float(data.get("price", 0) or 0),
+        })
+
+    if not payload:
+        return {"saved_count": 0}
+
+    try:
+        res = (
+            supabase.table("ai_recommend_history")
+            .upsert(payload, on_conflict="scan_date,symbol")
+            .execute()
+        )
+        return {"saved_count": len(res.data or payload)}
+    except Exception as exc:
+        # 歷史表尚未建立時，不影響既有 Top5 掃描。
+        return {"saved_count": 0, "error": str(exc)}
+
+
+def get_pending_ai_performance(limit: int = 100) -> list:
+    """讀取尚未完成 Day+1 或 Day+5 的紀錄。"""
+    try:
+        res = (
+            supabase.table("ai_recommend_history")
+            .select("*")
+            .or_("day1_price.is.null,day5_price.is.null")
+            .order("scan_date")
+            .limit(max(1, min(limit, 500)))
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
+
+
+def update_ai_performance(row_id: int, values: dict) -> bool:
+    if not row_id or not values:
+        return False
+    try:
+        supabase.table("ai_recommend_history").update(values).eq("id", row_id).execute()
+        return True
+    except Exception:
+        return False

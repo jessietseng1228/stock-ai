@@ -22,10 +22,11 @@ from report import (
     build_single_flex,
 )
 from market_scan import scan_market_top5, market_top5_status
+from performance_tracker import update_recommendation_performance
 
 app = Flask(__name__)
 
-VERSION = "v18.0.1-stable"
+VERSION = "v18.1.0-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -221,7 +222,18 @@ def scan_top5():
         "batch_columns": result.get("batch_columns"),
         "fallback_count": result.get("fallback_count"),
         "score_version": result.get("score_version"),
+        "history_saved_count": result.get("history_saved_count"),
+        "history_error": result.get("history_error"),
     })
+
+
+@app.route("/update_performance", methods=["GET", "POST"])
+@app.route("/update_performance_cron", methods=["GET", "POST"])
+def update_performance():
+    """v18.1：更新 Top5 推薦的第 1 與第 5 個交易日績效。"""
+    limit = request.args.get("limit", default=100, type=int)
+    result = update_recommendation_performance(limit=limit or 100)
+    return jsonify({"version": VERSION, "job": "update_performance", **result})
 
 
 @app.route("/top5_status", methods=["GET"])

@@ -11,7 +11,7 @@ import requests
 import yfinance as yf
 
 from stock import _build_data_from_values, display_symbol
-from supabase_db import save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta
+from supabase_db import save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta, save_ai_recommend_history
 from ai import SCORE_VERSION
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
@@ -281,6 +281,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     rows.sort(key=lambda item: (item.get("score", 0), item.get("turnover", 0)), reverse=True)
     stored_rows = rows[:DEFAULT_STORE_COUNT]
     saved_count = save_market_top5(scan_date, stored_rows) if save else 0
+    history_result = save_ai_recommend_history(scan_date, stored_rows, limit=5) if save else {"saved_count": 0}
 
     return {
         "status": "ok",
@@ -289,6 +290,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "candidate_count": len(candidates),
         "scored_count": len(rows),
         "saved_count": saved_count,
+        "history_saved_count": history_result.get("saved_count", 0),
+        "history_error": history_result.get("error"),
         "batch_empty": batch_is_empty,
         "fallback_count": len(fallback_data),
         "score_version": SCORE_VERSION,
