@@ -20,13 +20,15 @@ from report import (
     build_morning_flex,
     build_top5_flex,
     build_single_flex,
+    build_ai_history_report,
+    build_ai_history_flex,
 )
 from market_scan import scan_market_top5, market_top5_status
 from performance_tracker import update_recommendation_performance
 
 app = Flask(__name__)
 
-VERSION = "v18.1.0-stable"
+VERSION = "v18.1.1-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -38,9 +40,10 @@ CMD_ADD = {"加股票", "新增股票", "➕ 加股票", "action=add_stock"}
 CMD_DELETE = {"刪股票", "刪除股票", "➖ 刪股票", "action=delete_stock"}
 CMD_TOP5 = {"TOP5可買", "🔥 TOP5可買", "top5", "action=top5"}
 CMD_ANALYZE = {"個股分析", "📈 個股分析", "analyze", "action=analyze"}
+CMD_AI_HISTORY = {"AI歷史", "AI推薦歷史", "ai_history", "action=ai_history"}
 CMD_CANCEL = {"取消", "cancel", "離開"}
 CMD_DELETE_ALL = {"ALL", "DEL ALL", "DELETE ALL", "全部刪除", "清空", "清空自選"}
-ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_CANCEL
+ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_AI_HISTORY | CMD_CANCEL
 
 # v17.4 Stable：不使用背景 thread；Top5 掃描由單一同步 Cron 完成。
 
@@ -129,6 +132,12 @@ def handle_line_event(event: dict) -> None:
     if text in CMD_TOP5:
         clear_user_state(user_id)
         alt, flex, fallback = build_top5_flex()
+        reply_flex(reply_token, alt, flex, fallback)
+        return
+
+    if text in CMD_AI_HISTORY:
+        clear_user_state(user_id)
+        alt, flex, fallback = build_ai_history_flex()
         reply_flex(reply_token, alt, flex, fallback)
         return
 
@@ -239,6 +248,11 @@ def update_performance():
 @app.route("/top5_status", methods=["GET"])
 def top5_status():
     return jsonify({"status": "ok", "version": VERSION, **market_top5_status()})
+
+
+@app.route("/ai_history", methods=["GET"])
+def ai_history_page():
+    return build_ai_history_report(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/top5", methods=["GET"])

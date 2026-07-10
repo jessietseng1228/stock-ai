@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
 from market_scan import get_saved_or_scan_top5, today_taipei
 from ai import ai_comment, factor_summary, SCORE_VERSION
+from supabase_db import get_latest_ai_recommend_history
 
 DISCLAIMER = "提醒：AI Score 2.0 是多因子量價模型，不是投資建議。"
 
@@ -90,6 +91,77 @@ def build_top5_report(symbols: List[str] = None) -> str:
     lines.append("\n提醒：Top5 由 v18 每日市場掃描與多因子評分產生，不使用自選清單。")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
+
+
+
+def _history_return_text(value) -> str:
+    if value is None:
+        return "等待中"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "等待中"
+    sign = "+" if number > 0 else ""
+    return f"{sign}{number:.2f}%"
+
+
+def build_ai_history_report() -> str:
+    rows = get_latest_ai_recommend_history(limit=5)
+    if not rows:
+        return "📚 AI推薦歷史\n目前尚無歷史資料，請先執行 /scan_top5。"
+
+    scan_date = str(rows[0].get("scan_date") or "")
+    lines = [f"📚 AI推薦歷史｜{scan_date}", "────────────"]
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        name = str(row.get("name") or "")
+        title = f"{symbol} {name}".strip()
+        lines.append(
+            f"{int(row.get('rank') or 0)}. {title}｜AI {int(row.get('ai_score') or 0)}\n"
+            f"   推薦價：{float(row.get('entry_price') or 0):.2f}\n"
+            f"   Day+1：{_history_return_text(row.get('day1_return'))}\n"
+            f"   Day+5：{_history_return_text(row.get('day5_return'))}"
+        )
+    lines.append("────────────")
+    lines.append("Day+1、Day+5 依實際交易日計算。")
+    lines.append(DISCLAIMER)
+    return "\n".join(lines)
+
+
+def build_ai_history_flex() -> Tuple[str, Dict, str]:
+    fallback = build_ai_history_report()
+    rows = get_latest_ai_recommend_history(limit=5)
+    if not rows:
+        return "AI推薦歷史", {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [_text(fallback)]}}, fallback
+
+    scan_date = str(rows[0].get("scan_date") or "")
+    contents = [
+        _text("📚 AI推薦歷史", "xl", "bold"),
+        _text(f"最近一次掃描：{scan_date}", "xs", color="#666666"),
+    ]
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        name = str(row.get("name") or "")
+        title = f"{int(row.get('rank') or 0)}. {symbol} {name}".strip()
+        contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "xs",
+            "margin": "md",
+            "paddingAll": "12px",
+            "backgroundColor": "#F7F7F7",
+            "cornerRadius": "10px",
+            "contents": [
+                _text(title, "md", "bold"),
+                _text(f"AI 2.0：{int(row.get('ai_score') or 0)}分｜推薦價 {float(row.get('entry_price') or 0):.2f}", "sm"),
+                _text(f"Day+1：{_history_return_text(row.get('day1_return'))}｜Day+5：{_history_return_text(row.get('day5_return'))}", "sm", "bold"),
+                _button("分析", f"action=analyze_symbol&symbol={symbol}"),
+            ],
+        })
+    contents.append(_text("Day+1、Day+5 依實際交易日計算。", "xs", color="#666666"))
+    contents.append(_text(DISCLAIMER, "xs", color="#888888"))
+    flex = {"type": "bubble", "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": contents}}
+    return "AI推薦歷史", flex, fallback
 
 
 def build_single_analysis(symbol: str) -> str:

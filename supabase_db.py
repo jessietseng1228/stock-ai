@@ -335,3 +335,33 @@ def update_ai_performance(row_id: int, values: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+def get_latest_ai_recommend_history(limit: int = 5) -> list:
+    """取得最近一次 Top5 推薦歷史，供 LINE「AI歷史」查詢。"""
+    try:
+        date_res = (
+            supabase.table("ai_recommend_history")
+            .select("scan_date")
+            .order("scan_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not date_res.data:
+            return []
+
+        latest_date = str(date_res.data[0].get("scan_date") or "")
+        if not latest_date:
+            return []
+
+        res = (
+            supabase.table("ai_recommend_history")
+            .select("*")
+            .eq("scan_date", latest_date)
+            .order("rank")
+            .limit(max(1, min(limit, 20)))
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
