@@ -12,6 +12,7 @@ import yfinance as yf
 
 from stock import _build_data_from_values, display_symbol
 from supabase_db import save_market_top5, get_market_top5, get_market_top5_meta
+from ai import SCORE_VERSION
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
@@ -290,6 +291,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "saved_count": saved_count,
         "batch_empty": batch_is_empty,
         "fallback_count": len(fallback_data),
+        "score_version": SCORE_VERSION,
         "batch_rows": int(getattr(batch, "shape", (0, 0))[0]) if batch is not None else 0,
         "batch_columns": int(getattr(batch, "shape", (0, 0))[1]) if batch is not None else 0,
         "top5": stored_rows[:5],

@@ -1,9 +1,9 @@
 from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
 from market_scan import get_saved_or_scan_top5, today_taipei
-from ai import ai_comment
+from ai import ai_comment, factor_summary, SCORE_VERSION
 
-DISCLAIMER = "提醒：AI分數是量價模型，不是投資建議。"
+DISCLAIMER = "提醒：AI Score 2.0 是多因子量價模型，不是投資建議。"
 
 
 def _arrow(data: Dict) -> str:
@@ -54,7 +54,7 @@ def build_morning_report(symbols: List[str]) -> str:
         arrow = _arrow(data)
         lines.append(
             f"\n{data['title']}\n"
-            f"AI：{data['score']} 分 {data['stars']}｜{data['trend']}\n"
+            f"AI 2.0：{data['score']} 分 {data['stars']}｜{data['trend']}\n"
             f"價格：{data['price']:.2f}\n"
             f"漲跌：{arrow} {data['change']:.2f} ({data['change_pct']:.2f}%)\n"
             f"五日：{data['five_pct']:.2f}%\n"
@@ -81,12 +81,12 @@ def build_top5_report(symbols: List[str] = None) -> str:
         reasons = "、".join(data.get("reasons", []))
         lines.append(
             f"{idx}. {data['title']}\n"
-            f"   {data['score']} 分 {data['stars']}｜{data['trend']}\n"
+            f"   AI 2.0：{data['score']} 分 {data['stars']}｜{data['trend']}\n"
             f"   {data['price']:.2f}｜{arrow}{data['change_pct']:.2f}%｜5日 {data['five_pct']:.2f}%\n"
             f"   理由：{reasons}"
         )
 
-    lines.append("\n提醒：Top5 由 v17 每日市場掃描結果產生，不使用自選清單。")
+    lines.append("\n提醒：Top5 由 v18 每日市場掃描與多因子評分產生，不使用自選清單。")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
@@ -121,7 +121,7 @@ def _stock_box(data: Dict, rank: int = 0) -> Dict:
         "cornerRadius": "10px",
         "contents": [
             _text(title, "md", "bold"),
-            _text(f"AI {data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
+            _text(f"AI 2.0 {data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
             _text(f"{data['price']:.2f}｜{arrow}{data['change_pct']:.2f}%｜5日 {data['five_pct']:.2f}%"),
             _text(f"支撐/壓力：{data['support']:.2f} / {data['resistance']:.2f}", "xs", color="#666666"),
             _button("分析", f"action=analyze_symbol&symbol={data['symbol']}"),
@@ -157,7 +157,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("🔥 今日 TOP5可買", "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI評分｜{today_taipei()}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 2.0｜{today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))
@@ -177,7 +177,8 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
     contents = [
         _text(f"📈 {data['title']}", "xl", "bold"),
         _text(f"{data['price']:.2f}｜{arrow}{data['change']:.2f} ({data['change_pct']:.2f}%)", "md", "bold"),
-        _text(f"AI：{data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
+        _text(f"AI 2.0：{data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
+        _text(data.get("factor_summary") or factor_summary(data), "xs", color="#555555"),
         _text(f"五日：{data['five_pct']:.2f}%"),
         _text(f"MA5/10/20：{data['ma5']:.2f} / {data['ma10']:.2f} / {data['ma20']:.2f}"),
         _text(f"支撐：{data['support']:.2f}｜壓力：{data['resistance']:.2f}"),

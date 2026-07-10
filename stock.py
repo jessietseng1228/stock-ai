@@ -1,10 +1,11 @@
 import re
 import time
+import statistics
 from typing import Dict, List, Optional, Tuple
 import requests
 import yfinance as yf
 
-from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines
+from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, SCORE_VERSION
 
 CACHE_SECONDS = 60 * 10
 _CACHE: Dict[str, Tuple[float, Optional[Dict]]] = {}
@@ -167,8 +168,21 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
     volumes = volumes or []
     volumes = [int(v or 0) for v in volumes]
     volume = volumes[-1] if volumes else 0
-    recent_volumes = volumes[-5:] if volumes else []
-    avg_volume = int(sum(recent_volumes) / len(recent_volumes)) if recent_volumes else 0
+    prior_volumes = volumes[-6:-1] if len(volumes) >= 2 else []
+    avg_volume = int(sum(prior_volumes) / len(prior_volumes)) if prior_volumes else 0
+    volume_ratio = (volume / avg_volume) if avg_volume else 0
+
+    returns = []
+    for i in range(max(1, len(closes) - 20), len(closes)):
+        previous = closes[i - 1]
+        if previous:
+            returns.append((closes[i] - previous) / previous * 100)
+    volatility = statistics.pstdev(returns) if len(returns) >= 2 else 0
+
+    recent_20 = closes[-20:] if len(closes) >= 20 else closes
+    high_20 = max(recent_20) if recent_20 else price
+    low_20 = min(recent_20) if recent_20 else price
+    position_20d = ((price - low_20) / (high_20 - low_20) * 100) if high_20 > low_20 else 50
 
     ma5 = _ma(closes, 5)
     ma10 = _ma(closes, 10)
@@ -189,6 +203,11 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
         "five_pct": five_pct,
         "volume": volume,
         "avg_volume": avg_volume,
+        "volume_ratio": volume_ratio,
+        "volatility": volatility,
+        "high_20": high_20,
+        "low_20": low_20,
+        "position_20d": position_20d,
         "ma5": ma5,
         "ma10": ma10,
         "ma20": ma20,
@@ -196,7 +215,10 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
         "resistance": resistance,
         "stop_loss": stop_loss,
     }
+    data["factor_scores"] = score_factors(data)
     data["score"] = score_stock(data)
+    data["score_version"] = SCORE_VERSION
+    data["factor_summary"] = factor_summary(data)
     data["stars"] = score_to_stars(data["score"])
     data["trend"] = trend_label(data["score"])
     data["reasons"] = reason_lines(data)
@@ -273,7 +295,8 @@ def analyze_stock(symbol: str) -> str:
         f"支撐：{data['support']:.2f}\n"
         f"壓力：{data['resistance']:.2f}\n"
         f"停損參考：{data['stop_loss']:.2f}\n"
-        f"AI評分：{data['score']} 分 {data['stars']}\n"
+        f"AI評分：{data['score']} 分 {data['stars']}（{data.get('score_version', SCORE_VERSION)}）\n"
+        f"因子：{data.get('factor_summary', factor_summary(data))}\n"
         f"趨勢：{data['trend']}\n"
         f"\nAI理由：\n{reasons}\n"
         f"\nAI分析：\n{ai_comment(data)}\n"
