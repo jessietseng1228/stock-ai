@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 import os
 import re
+import math
 
 import requests
 import yfinance as yf
@@ -128,43 +129,69 @@ def get_market_universe() -> List[Dict]:
     return sorted(clean, key=lambda item: item.get("turnover", 0), reverse=True)
 
 
-def _extract_series(batch, ticker: str, field: str) -> List:
-    """相容 yfinance 單檔/多檔欄位格式。"""
+def _yf_ticker(row: Dict) -> str:
+    """上市使用 .TW，上櫃使用 .TWO。"""
+    suffix = ".TWO" if str(row.get("market", "")).upper() == "TPEX" else ".TW"
+    return f"{row['symbol']}{suffix}"
+
+
+def _clean_numeric(values) -> List[float]:
+    cleaned: List[float] = []
+    for value in values:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            cleaned.append(number)
+    return cleaned
+
+
+def _extract_series(batch, ticker: str, field: str) -> List[float]:
+    """相容 yfinance 不同版本的單層／多層欄位格式。"""
     if batch is None or getattr(batch, "empty", True):
         return []
+
     try:
         columns = batch.columns
-        if getattr(columns, "nlevels", 1) > 1:
-            if (field, ticker) in columns:
-                series = batch[(field, ticker)]
-            elif (ticker, field) in columns:
-                series = batch[(ticker, field)]
-            else:
-                return []
-        else:
+        if getattr(columns, "nlevels", 1) <= 1:
             if field not in columns:
                 return []
-            series = batch[field]
-        return [value for value in series.tolist() if value is not None]
+            return _clean_numeric(batch[field].tolist())
+
+        # yfinance 可能回 (Ticker, Price) 或 (Price, Ticker)，不依賴固定層級順序。
+        for column in columns:
+            parts = [str(part) for part in column]
+            if ticker in parts and field in parts:
+                return _clean_numeric(batch[column].tolist())
+
+        # group_by=ticker 時通常可直接 batch[ticker][field]。
+        try:
+            frame = batch[ticker]
+            if field in frame.columns:
+                return _clean_numeric(frame[field].tolist())
+        except Exception:
+            pass
+
+        return []
     except Exception:
         return []
 
 
 def _batch_download(candidates: List[Dict]):
-    tickers = [f"{row['symbol']}.TW" for row in candidates]
+    tickers = [_yf_ticker(row) for row in candidates]
     if not tickers:
         return None
     return yf.download(
         tickers=tickers,
         period=YF_PERIOD,
         interval="1d",
-        group_by="column",
+        group_by="ticker",
         auto_adjust=False,
         progress=False,
         threads=True,
         timeout=YF_TIMEOUT,
     )
-
 
 def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) -> Dict:
     """從高成交值候選池批次抓歷史行情，產生 Top5。"""
@@ -178,7 +205,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
 
     for quote in candidates:
         code = quote["symbol"]
-        ticker = f"{code}.TW"
+        ticker = _yf_ticker(quote)
         closes = _extract_series(batch, ticker, "Close")
         volumes = _extract_series(batch, ticker, "Volume")
         data = _build_data_from_values(ticker, closes, volumes)
@@ -213,6 +240,9 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "candidate_count": len(candidates),
         "scored_count": len(rows),
         "saved_count": saved_count,
+        "batch_empty": bool(batch is None or getattr(batch, "empty", True)),
+        "batch_rows": int(getattr(batch, "shape", (0, 0))[0]) if batch is not None else 0,
+        "batch_columns": int(getattr(batch, "shape", (0, 0))[1]) if batch is not None else 0,
         "top5": stored_rows[:5],
     }
 
