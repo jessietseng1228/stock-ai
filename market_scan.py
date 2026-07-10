@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
+import os
 import re
-import time
-import requests
 
-from stock import get_stock_data, display_symbol
+import requests
+import yfinance as yf
+
+from stock import _build_data_from_values, display_symbol
 from supabase_db import save_market_top5, get_market_top5, get_market_top5_meta
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
-# v17：每天 Cron 預先掃描市場，不再由使用者點擊時即時掃描。
-# 預設先取成交值前 300 檔，再做 AI Score，避免 1800 檔逐檔打 Yahoo 造成 Render / LINE timeout。
-TOP_TURNOVER_LIMIT = 300
-SCAN_SLEEP_SECONDS = 0.03
+# v17.4 Stable：單一 Cron、同步完成、批次抓價。
+# 可由 Render Environment 調整，不必改程式。
+DEFAULT_CANDIDATE_LIMIT = max(20, int(os.getenv("TOP5_CANDIDATE_LIMIT", "60")))
+DEFAULT_STORE_COUNT = max(5, int(os.getenv("TOP5_STORE_COUNT", "20")))
+MIN_TURNOVER = max(0, int(os.getenv("TOP5_MIN_TURNOVER", "100000000")))
+YF_PERIOD = os.getenv("TOP5_YF_PERIOD", "3mo")
+YF_TIMEOUT = max(10, int(os.getenv("TOP5_YF_TIMEOUT", "25")))
 
 
 def today_taipei() -> str:
@@ -37,23 +42,22 @@ def _is_common_stock(code: str, name: str = "") -> bool:
     if not re.fullmatch(r"\d{4}", code):
         return False
     bad_words = ["ETF", "ETN", "權證", "牛", "熊", "購", "售", "特", "受益", "指數"]
-    return not any(w in name.upper() for w in bad_words)
+    return not any(word in name.upper() for word in bad_words)
 
 
 def fetch_twse_quotes() -> List[Dict]:
-    """抓上市每日行情。失敗時回傳空清單，不中斷流程。"""
     url = "https://www.twse.com.tw/exchangeReport/MI_INDEX"
     params = {"response": "json", "type": "ALLBUT0999"}
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=20)
-        payload = resp.json()
+        response = requests.get(url, params=params, headers=headers, timeout=15)
+        response.raise_for_status()
+        payload = response.json()
     except Exception:
         return []
 
-    tables = payload.get("tables") or []
     rows: List[Dict] = []
-    for table in tables:
+    for table in payload.get("tables") or []:
         fields = table.get("fields") or []
         data_rows = table.get("data") or []
         if "證券代號" not in fields or "證券名稱" not in fields:
@@ -63,7 +67,6 @@ def fetch_twse_quotes() -> List[Dict]:
         idx_value = fields.index("成交金額") if "成交金額" in fields else None
         idx_volume = fields.index("成交股數") if "成交股數" in fields else None
         idx_close = fields.index("收盤價") if "收盤價" in fields else None
-
         for row in data_rows:
             if len(row) <= max(idx_code, idx_name):
                 continue
@@ -83,17 +86,17 @@ def fetch_twse_quotes() -> List[Dict]:
 
 
 def fetch_tpex_quotes() -> List[Dict]:
-    """抓上櫃每日行情。失敗時回傳空清單，不中斷流程。"""
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        data_rows = resp.json()
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        payload = response.json()
     except Exception:
         return []
 
     rows: List[Dict] = []
-    for item in data_rows if isinstance(data_rows, list) else []:
+    for item in payload if isinstance(payload, list) else []:
         code = str(item.get("SecuritiesCompanyCode") or item.get("代號") or "").strip()
         name = str(item.get("CompanyName") or item.get("名稱") or "").strip()
         if not _is_common_stock(code, name):
@@ -117,50 +120,91 @@ def get_market_universe() -> List[Dict]:
         code = display_symbol(row.get("symbol", ""))
         if not code or code in seen:
             continue
+        if row.get("turnover", 0) < MIN_TURNOVER:
+            continue
         seen.add(code)
         row["symbol"] = code
         clean.append(row)
-    return sorted(clean, key=lambda x: x.get("turnover", 0), reverse=True)
+    return sorted(clean, key=lambda item: item.get("turnover", 0), reverse=True)
 
 
-def scan_market_top5(limit: int = TOP_TURNOVER_LIMIT, save: bool = True) -> Dict:
-    """
-    v17 主流程：
-    1. 抓上市櫃行情
-    2. 依成交值取前 N 檔
-    3. 逐檔抓 K 線並算 AI Score
-    4. 存 Supabase market_top5_results
-    """
+def _extract_series(batch, ticker: str, field: str) -> List:
+    """相容 yfinance 單檔/多檔欄位格式。"""
+    if batch is None or getattr(batch, "empty", True):
+        return []
+    try:
+        columns = batch.columns
+        if getattr(columns, "nlevels", 1) > 1:
+            if (field, ticker) in columns:
+                series = batch[(field, ticker)]
+            elif (ticker, field) in columns:
+                series = batch[(ticker, field)]
+            else:
+                return []
+        else:
+            if field not in columns:
+                return []
+            series = batch[field]
+        return [value for value in series.tolist() if value is not None]
+    except Exception:
+        return []
+
+
+def _batch_download(candidates: List[Dict]):
+    tickers = [f"{row['symbol']}.TW" for row in candidates]
+    if not tickers:
+        return None
+    return yf.download(
+        tickers=tickers,
+        period=YF_PERIOD,
+        interval="1d",
+        group_by="column",
+        auto_adjust=False,
+        progress=False,
+        threads=True,
+        timeout=YF_TIMEOUT,
+    )
+
+
+def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) -> Dict:
+    """從高成交值候選池批次抓歷史行情，產生 Top5。"""
     scan_date = today_taipei()
+    requested_limit = max(5, min(int(limit or DEFAULT_CANDIDATE_LIMIT), 150))
     universe = get_market_universe()
-    candidates = universe[: max(1, int(limit or TOP_TURNOVER_LIMIT))]
+    candidates = universe[:requested_limit]
     rows: List[Dict] = []
 
-    for q in candidates:
-        code = q["symbol"]
-        data = get_stock_data(code, force_refresh=True)
+    batch = _batch_download(candidates)
+
+    for quote in candidates:
+        code = quote["symbol"]
+        ticker = f"{code}.TW"
+        closes = _extract_series(batch, ticker, "Close")
+        volumes = _extract_series(batch, ticker, "Volume")
+        data = _build_data_from_values(ticker, closes, volumes)
         if not data:
             continue
-        price = data.get("price", 0) or 0
-        volume = data.get("volume", 0) or 0
-        change_pct = data.get("change_pct", 0) or 0
-        five_pct = data.get("five_pct", 0) or 0
+
+        price = float(data.get("price", 0) or 0)
+        change_pct = float(data.get("change_pct", 0) or 0)
+        five_pct = float(data.get("five_pct", 0) or 0)
+        effective_volume = float(data.get("volume", 0) or quote.get("volume", 0) or 0)
+
         if price <= 0 or change_pct <= -6 or five_pct <= -12:
             continue
-        # 若 Yahoo 回傳 volume 缺漏，使用交易所當日量補判斷。
-        effective_volume = volume or q.get("volume", 0)
         if effective_volume and effective_volume < 300_000:
             continue
-        data["market"] = q.get("market", "")
-        data["turnover"] = q.get("turnover", 0)
+
+        data["name"] = quote.get("name") or data.get("name", "")
+        data["title"] = f"{code} {data['name']}" if data.get("name") else code
+        data["market"] = quote.get("market", "")
+        data["turnover"] = quote.get("turnover", 0)
         data["scan_date"] = scan_date
         rows.append(data)
-        time.sleep(SCAN_SLEEP_SECONDS)
 
-    rows = sorted(rows, key=lambda x: (x.get("score", 0), x.get("turnover", 0)), reverse=True)
-    top_rows = rows[:20]
-    if save:
-        save_market_top5(scan_date, top_rows)
+    rows.sort(key=lambda item: (item.get("score", 0), item.get("turnover", 0)), reverse=True)
+    stored_rows = rows[:DEFAULT_STORE_COUNT]
+    saved_count = save_market_top5(scan_date, stored_rows) if save else 0
 
     return {
         "status": "ok",
@@ -168,8 +212,8 @@ def scan_market_top5(limit: int = TOP_TURNOVER_LIMIT, save: bool = True) -> Dict
         "universe_count": len(universe),
         "candidate_count": len(candidates),
         "scored_count": len(rows),
-        "saved_count": len(top_rows),
-        "top5": top_rows[:5],
+        "saved_count": saved_count,
+        "top5": stored_rows[:5],
     }
 
 
