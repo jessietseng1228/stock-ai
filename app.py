@@ -25,7 +25,7 @@ from market_scan import scan_market_top5, market_top5_status
 
 app = Flask(__name__)
 
-VERSION = "v17.4.1-stable"
+VERSION = "v17.4.2-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -219,6 +219,7 @@ def scan_top5():
         "batch_empty": result.get("batch_empty"),
         "batch_rows": result.get("batch_rows"),
         "batch_columns": result.get("batch_columns"),
+        "fallback_count": result.get("fallback_count"),
     })
 
 

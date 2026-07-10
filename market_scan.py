@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 import re
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import yfinance as yf
@@ -178,6 +179,48 @@ def _extract_series(batch, ticker: str, field: str) -> List[float]:
         return []
 
 
+
+
+def _fetch_yahoo_chart(ticker: str) -> Optional[Dict]:
+    """yfinance 批次無資料時的備援；直接讀 Yahoo Chart JSON。"""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {"range": YF_PERIOD, "interval": "1d"}
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json,text/plain,*/*"}
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=12)
+        response.raise_for_status()
+        payload = response.json()
+        result = payload.get("chart", {}).get("result") or []
+        if not result:
+            return None
+        quote = (result[0].get("indicators", {}).get("quote") or [{}])[0]
+        closes = _clean_numeric(quote.get("close") or [])
+        volumes = _clean_numeric(quote.get("volume") or [])
+        if not closes:
+            return None
+        return {"closes": closes, "volumes": volumes}
+    except Exception:
+        return None
+
+
+def _fallback_chart_batch(candidates: List[Dict]) -> Dict[str, Dict]:
+    """平行抓取備援行情，避免逐檔等待造成 Render timeout。"""
+    results: Dict[str, Dict] = {}
+    if not candidates:
+        return results
+    workers = min(8, max(1, len(candidates)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_fetch_yahoo_chart, _yf_ticker(row)): _yf_ticker(row) for row in candidates}
+        for future in as_completed(futures):
+            ticker = futures[future]
+            try:
+                data = future.result()
+            except Exception:
+                data = None
+            if data:
+                results[ticker] = data
+    return results
+
 def _batch_download(candidates: List[Dict]):
     tickers = [_yf_ticker(row) for row in candidates]
     if not tickers:
@@ -202,12 +245,17 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     rows: List[Dict] = []
 
     batch = _batch_download(candidates)
+    batch_is_empty = bool(batch is None or getattr(batch, "empty", True))
+    fallback_data = _fallback_chart_batch(candidates) if batch_is_empty else {}
 
     for quote in candidates:
         code = quote["symbol"]
         ticker = _yf_ticker(quote)
         closes = _extract_series(batch, ticker, "Close")
         volumes = _extract_series(batch, ticker, "Volume")
+        if not closes and ticker in fallback_data:
+            closes = fallback_data[ticker].get("closes", [])
+            volumes = fallback_data[ticker].get("volumes", [])
         data = _build_data_from_values(ticker, closes, volumes)
         if not data:
             continue
@@ -240,7 +288,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "candidate_count": len(candidates),
         "scored_count": len(rows),
         "saved_count": saved_count,
-        "batch_empty": bool(batch is None or getattr(batch, "empty", True)),
+        "batch_empty": batch_is_empty,
+        "fallback_count": len(fallback_data),
         "batch_rows": int(getattr(batch, "shape", (0, 0))[0]) if batch is not None else 0,
         "batch_columns": int(getattr(batch, "shape", (0, 0))[1]) if batch is not None else 0,
         "top5": stored_rows[:5],
