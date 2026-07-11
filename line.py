@@ -31,12 +31,12 @@ def reply_text(reply_token: str, text: str) -> None:
     _safe_post(LINE_REPLY_URL, payload)
 
 
-def push_text(user_id: str, text: str) -> None:
+def push_text(user_id: str, text: str) -> bool:
     payload = {
         "to": user_id,
         "messages": [{"type": "text", "text": (text or "")[:4900]}],
     }
-    _safe_post(LINE_PUSH_URL, payload)
+    return _safe_post(LINE_PUSH_URL, payload)
 
 
 def reply_flex(reply_token: str, alt_text: str, flex_contents: Dict, fallback_text: str = "") -> None:
@@ -53,7 +53,7 @@ def reply_flex(reply_token: str, alt_text: str, flex_contents: Dict, fallback_te
         reply_text(reply_token, fallback_text)
 
 
-def push_flex(user_id: str, alt_text: str, flex_contents: Dict, fallback_text: str = "") -> None:
+def push_flex(user_id: str, alt_text: str, flex_contents: Dict, fallback_text: str = "") -> bool:
     payload = {
         "to": user_id,
         "messages": [{
@@ -63,8 +63,11 @@ def push_flex(user_id: str, alt_text: str, flex_contents: Dict, fallback_text: s
         }],
     }
     ok = _safe_post(LINE_PUSH_URL, payload)
-    if not ok and fallback_text:
-        push_text(user_id, fallback_text)
+    if ok:
+        return True
+    if fallback_text:
+        return push_text(user_id, fallback_text)
+    return False
 
 
 def get_event_text(event: Dict) -> str:

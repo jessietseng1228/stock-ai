@@ -25,10 +25,11 @@ from report import (
 )
 from market_scan import scan_market_top5, market_top5_status
 from performance_tracker import update_recommendation_performance
+from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v18.1.1-stable"
+VERSION = "v18.1.2-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -187,24 +188,10 @@ def handle_line_event(event: dict) -> None:
 
 @app.route("/cron", methods=["GET", "POST"])
 def cron_push_morning_report():
-    """Render Cron 每天 09:00 呼叫這支。
-
-    v17.2：這支只負責推播早報，不再重新掃描 TOP5。
-    TOP5 請由 08:30 的 /scan_top5 預先產生，避免免費 Render 重複大量運算，
-    也避免 Cron Response 過大被判定失敗。
-    """
-    user_ids = get_all_user_ids()
-    sent = 0
-
-    for user_id in user_ids:
-        stocks = get_user_stocks(user_id)
-        if not stocks:
-            continue
-        alt, flex, fallback = build_morning_flex(stocks)
-        push_flex(user_id, alt, flex, fallback)
-        sent += 1
-
-    return jsonify({"status": "ok", "version": VERSION, "job": "morning_push", "sent": sent})
+    """手動測試入口；正式排程請使用 Render Cron Job 執行 cron_runner.py。"""
+    result = run_morning_report()
+    http_status = 200 if result.get("failed", 0) == 0 else 500
+    return jsonify({"version": VERSION, **result}), http_status
 
 
 @app.route("/push", methods=["GET", "POST"])
