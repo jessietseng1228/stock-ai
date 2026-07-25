@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 import yfinance as yf
 
-from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, SCORE_VERSION, TECH_VERSION
+from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, technical_score, technical_summary, SCORE_VERSION, TECH_VERSION
 
 CACHE_SECONDS = 60 * 10
 _CACHE: Dict[str, Tuple[float, Optional[Dict]]] = {}
@@ -309,10 +309,12 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
         "resistance": resistance,
         "stop_loss": stop_loss,
     }
+    data["technical_scores"] = technical_score(data)
     data["factor_scores"] = score_factors(data)
     data["score"] = score_stock(data)
     data["score_version"] = SCORE_VERSION
     data["factor_summary"] = factor_summary(data)
+    data["technical_summary"] = technical_summary(data)
     data["stars"] = score_to_stars(data["score"])
     data["trend"] = trend_label(data["score"])
     data["reasons"] = reason_lines(data)

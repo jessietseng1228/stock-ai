@@ -286,7 +286,7 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
             "name": data.get("name") or "",
             "market": data.get("market") or "TWSE",
             "rank": rank,
-            "score_version": data.get("score_version") or "AI Score 2.0",
+            "score_version": data.get("score_version") or "AI Score 3.0",
             "ai_score": int(data.get("score", 0) or 0),
             "trend_score": int(factors.get("trend", 0) or 0),
             "momentum_score": int(factors.get("momentum", 0) or 0),
