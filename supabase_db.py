@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing import List, Optional
 from supabase import create_client, Client
 
@@ -153,6 +154,35 @@ def clear_user_state(user_id: str) -> None:
     supabase.table("user_state").delete().eq("user_id", user_id).execute()
 
 
+
+def _encode_v20_plan(data: dict) -> str:
+    plan = data.get("trade_plan") or {}
+    if not plan:
+        return str(data.get("trend") or "")
+    payload = {
+        "v": "20.1",
+        "decision": plan.get("decision") or data.get("decision") or "",
+        "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
+        "pattern": plan.get("pattern") or data.get("pattern") or "",
+        "entry_low": float(plan.get("entry_low", data.get("entry_low", 0)) or 0),
+        "entry_high": float(plan.get("entry_high", data.get("entry_high", 0)) or 0),
+        "target1": float(plan.get("target1", data.get("target1", 0)) or 0),
+        "target2": float(plan.get("target2", data.get("target2", 0)) or 0),
+        "rr": float(plan.get("rr", data.get("rr", 0)) or 0),
+    }
+    return "V20PLAN:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _decode_v20_plan(value) -> dict:
+    text = str(value or "")
+    if not text.startswith("V20PLAN:"):
+        return {}
+    try:
+        payload = json.loads(text[len("V20PLAN:"):])
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
 # =========================
 # v17 market TOP5 results
 # =========================
@@ -180,7 +210,7 @@ def save_market_top5(scan_date: str, rows: list) -> int:
             "name": data.get("name") or "",
             "score": int(data.get("score", 0) or 0),
             "stars": data.get("stars") or "",
-            "trend": data.get("trend") or "",
+            "trend": _encode_v20_plan(data),
             "price": float(data.get("price", 0) or 0),
             "change_pct": float(data.get("change_pct", 0) or 0),
             "five_pct": float(data.get("five_pct", 0) or 0),
@@ -213,13 +243,23 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
     for r in res.data or []:
         symbol = normalize_stock_id(str(r.get("symbol", "")))
         title = f"{symbol} {r.get('name')}" if r.get("name") else symbol
+        plan = _decode_v20_plan(r.get("trend"))
         rows.append({
             "symbol": symbol,
             "name": r.get("name") or "",
             "title": title,
             "score": int(r.get("score", 0) or 0),
             "stars": r.get("stars") or "",
-            "trend": r.get("trend") or "",
+            "trend": plan.get("decision") or r.get("trend") or "",
+            "decision": plan.get("decision") or "",
+            "confidence": int(plan.get("confidence", 0) or 0),
+            "pattern": plan.get("pattern") or "",
+            "entry_low": float(plan.get("entry_low", 0) or 0),
+            "entry_high": float(plan.get("entry_high", 0) or 0),
+            "target1": float(plan.get("target1", 0) or 0),
+            "target2": float(plan.get("target2", 0) or 0),
+            "rr": float(plan.get("rr", 0) or 0),
+            "trade_plan": plan,
             "price": float(r.get("price", 0) or 0),
             "change": 0,
             "change_pct": float(r.get("change_pct", 0) or 0),

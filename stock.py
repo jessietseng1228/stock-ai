@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 import yfinance as yf
 
-from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, technical_score, technical_summary, SCORE_VERSION, TECH_VERSION
+from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, technical_score, technical_summary, trade_plan, decision_narrative, SCORE_VERSION, TECH_VERSION
 
 CACHE_SECONDS = 60 * 10
 _CACHE: Dict[str, Tuple[float, Optional[Dict]]] = {}
@@ -318,6 +318,9 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
     data["stars"] = score_to_stars(data["score"])
     data["trend"] = trend_label(data["score"])
     data["reasons"] = reason_lines(data)
+    data["trade_plan"] = trade_plan(data)
+    data.update(data["trade_plan"])
+    data["decision_narrative"] = decision_narrative(data)
     return data
 
 
@@ -398,10 +401,15 @@ def analyze_stock(symbol: str) -> str:
         f"ATR14：{data['atr14']:.2f}（{data['atr_pct']:.2f}%）\n"
         f"支撐：{data['support']:.2f}\n"
         f"壓力：{data['resistance']:.2f}\n"
+        f"型態：{data.get('pattern', '震盪整理')}\n"
+        f"決策：{data.get('decision', '⚪ 持續觀察')}\n"
+        f"Confidence：{data.get('confidence', 0)}%（訊號一致度）\n"
+        f"建議買點：{data.get('entry_low', 0):.2f}～{data.get('entry_high', 0):.2f}\n"
         f"停損參考：{data['stop_loss']:.2f}\n"
+        f"第一目標：{data.get('target1', 0):.2f}｜第二目標：{data.get('target2', 0):.2f}\n"
+        f"風險報酬比：1：{data.get('rr', 0):.2f}\n"
         f"AI評分：{data['score']} 分 {data['stars']}（{data.get('score_version', SCORE_VERSION)}）\n"
         f"因子：{data.get('factor_summary', factor_summary(data))}\n"
-        f"趨勢：{data['trend']}\n"
         f"\nAI理由：\n{reasons}\n"
         f"\nAI分析：\n{ai_comment(data)}\n"
         f"\n提醒：這是量價模型分析，不是投資建議。"

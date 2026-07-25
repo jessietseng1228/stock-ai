@@ -1,10 +1,10 @@
 from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
 from market_scan import get_saved_or_scan_top5, today_taipei
-from ai import ai_comment, factor_summary, technical_summary, SCORE_VERSION
+from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
 from supabase_db import get_latest_ai_recommend_history
 
-DISCLAIMER = "提醒：AI Score 3.0 是量價＋技術指標模型，不是投資建議。"
+DISCLAIMER = "提醒：v20.1 為量價與技術訊號決策輔助，不保證獲利，也不是投資建議。"
 
 
 def _arrow(data: Dict) -> str:
@@ -55,7 +55,7 @@ def build_morning_report(symbols: List[str]) -> str:
         arrow = _arrow(data)
         lines.append(
             f"\n{data['title']}\n"
-            f"AI 3.0：{data['score']} 分 {data['stars']}｜{data['trend']}\n"
+            f"AI 3.0：{data['score']} 分 {data['stars']}｜{(data.get('trade_plan') or trade_plan(data))['decision']}\n"
             f"價格：{data['price']:.2f}\n"
             f"漲跌：{arrow} {data['change']:.2f} ({data['change_pct']:.2f}%)\n"
             f"五日：{data['five_pct']:.2f}%\n"
@@ -83,12 +83,12 @@ def build_top5_report(symbols: List[str] = None) -> str:
         reasons = "、".join(data.get("reasons", []))
         lines.append(
             f"{idx}. {data['title']}\n"
-            f"   AI 3.0：{data['score']} 分 {data['stars']}｜{data['trend']}\n"
+            f"   AI 3.0：{data['score']} 分 {data['stars']}｜{(data.get('trade_plan') or trade_plan(data))['decision']}\n"
             f"   {data['price']:.2f}｜{arrow}{data['change_pct']:.2f}%｜5日 {data['five_pct']:.2f}%\n"
             f"   理由：{reasons}"
         )
 
-    lines.append("\n提醒：Top5 由 v19.2 每日市場掃描與 AI Score 3.0 產生，不使用自選清單。")
+    lines.append("\n提醒：Top5 由 v20.1 Decision Engine 產生，不使用自選清單。")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
@@ -184,6 +184,7 @@ def _button(label: str, data: str) -> Dict:
 def _stock_box(data: Dict, rank: int = 0) -> Dict:
     title = f"{rank}. {data['title']}" if rank else data["title"]
     arrow = _arrow(data)
+    plan = data.get("trade_plan") or trade_plan(data)
     return {
         "type": "box",
         "layout": "vertical",
@@ -194,9 +195,11 @@ def _stock_box(data: Dict, rank: int = 0) -> Dict:
         "cornerRadius": "10px",
         "contents": [
             _text(title, "md", "bold"),
-            _text(f"AI 3.0 {data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
+            _text(f"AI 3.0 {data['score']}分 {data['stars']}｜{plan['decision']}", "sm", "bold"),
+            _text(f"信心 {plan['confidence']}%｜型態 {plan['pattern']}", "xs", color="#555555"),
             _text(f"{data['price']:.2f}｜{arrow}{data['change_pct']:.2f}%｜5日 {data['five_pct']:.2f}%"),
-            _text(f"支撐/壓力：{data['support']:.2f} / {data['resistance']:.2f}", "xs", color="#666666"),
+            _text(f"買點 {plan['entry_low']:.2f}～{plan['entry_high']:.2f}｜停損 {data.get('stop_loss', 0):.2f}", "xs", color="#555555"),
+            _text(f"目標 {plan['target1']:.2f}｜RR 1：{plan['rr']:.2f}", "xs", color="#555555"),
             _button("分析", f"action=analyze_symbol&symbol={data['symbol']}"),
         ],
     }
@@ -230,7 +233,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("🔥 今日 TOP5可買", "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 3.0＋技術引擎 v19.2｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.1｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))
@@ -247,11 +250,13 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
 
     arrow = _arrow(data)
     reasons = data.get("reasons", []) or ["資料不足"]
+    plan = data.get("trade_plan") or trade_plan(data)
     contents = [
         _text(f"📈 {data['title']}", "xl", "bold"),
         _text(f"{data['price']:.2f}｜{arrow}{data['change']:.2f} ({data['change_pct']:.2f}%)", "md", "bold"),
-        _text(f"AI 3.0：{data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
-        _text("技術引擎 v19.2｜RSI・MACD・ATR・均線斜率已納入評分", "xs", color="#666666"),
+        _text(f"AI 3.0：{data['score']}分 {data['stars']}｜{plan['decision']}", "sm", "bold"),
+        _text("Decision Engine v20.1｜操作決策・信心・買點・目標・RR", "xs", color="#666666"),
+        _text(f"型態：{plan['pattern']}｜Confidence：{plan['confidence']}%", "xs", color="#555555"),
         _text(data.get("factor_summary") or factor_summary(data), "xs", color="#555555"),
         _text(data.get("technical_summary") or technical_summary(data), "xs", color="#555555"),
         _text(f"五日：{data['five_pct']:.2f}%"),
@@ -260,7 +265,10 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
         _text(f"RSI14：{data.get('rsi14', 0):.1f}｜ATR14：{data.get('atr14', 0):.2f} ({data.get('atr_pct', 0):.1f}%)", "xs"),
         _text(f"MACD：{data.get('macd', 0):.2f}｜Signal：{data.get('macd_signal', 0):.2f}｜Hist：{data.get('macd_hist', 0):.2f}", "xs"),
         _text(f"支撐：{data['support']:.2f}｜壓力：{data['resistance']:.2f}"),
+        _text(f"建議買點：{plan['entry_low']:.2f}～{plan['entry_high']:.2f}"),
         _text(f"停損參考：{data['stop_loss']:.2f}"),
+        _text(f"第一目標：{plan['target1']:.2f}｜第二目標：{plan['target2']:.2f}"),
+        _text(f"風險報酬比：1：{plan['rr']:.2f}"),
         _text("AI理由", "sm", "bold"),
     ]
     contents += [_text(f"✔ {r}", "xs", color="#555555") for r in reasons[:3]]
