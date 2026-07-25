@@ -230,7 +230,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("🔥 今日 TOP5可買", "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 2.0｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 2.0＋技術引擎 v19.1｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))
@@ -251,9 +251,13 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
         _text(f"📈 {data['title']}", "xl", "bold"),
         _text(f"{data['price']:.2f}｜{arrow}{data['change']:.2f} ({data['change_pct']:.2f}%)", "md", "bold"),
         _text(f"AI 2.0：{data['score']}分 {data['stars']}｜{data['trend']}", "sm", "bold"),
+        _text("技術引擎 v19.1｜RSI・MACD・ATR・均線斜率", "xs", color="#666666"),
         _text(data.get("factor_summary") or factor_summary(data), "xs", color="#555555"),
         _text(f"五日：{data['five_pct']:.2f}%"),
         _text(f"MA5/10/20：{data['ma5']:.2f} / {data['ma10']:.2f} / {data['ma20']:.2f}"),
+        _text(f"斜率5/10/20：{data.get('ma5_slope_pct', 0):.2f}% / {data.get('ma10_slope_pct', 0):.2f}% / {data.get('ma20_slope_pct', 0):.2f}%", "xs"),
+        _text(f"RSI14：{data.get('rsi14', 0):.1f}｜ATR14：{data.get('atr14', 0):.2f} ({data.get('atr_pct', 0):.1f}%)", "xs"),
+        _text(f"MACD：{data.get('macd', 0):.2f}｜Signal：{data.get('macd_signal', 0):.2f}｜Hist：{data.get('macd_hist', 0):.2f}", "xs"),
         _text(f"支撐：{data['support']:.2f}｜壓力：{data['resistance']:.2f}"),
         _text(f"停損參考：{data['stop_loss']:.2f}"),
         _text("AI理由", "sm", "bold"),

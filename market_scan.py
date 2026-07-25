@@ -197,9 +197,11 @@ def _fetch_yahoo_chart(ticker: str) -> Optional[Dict]:
         quote = (result[0].get("indicators", {}).get("quote") or [{}])[0]
         closes = _clean_numeric(quote.get("close") or [])
         volumes = _clean_numeric(quote.get("volume") or [])
+        highs = _clean_numeric(quote.get("high") or [])
+        lows = _clean_numeric(quote.get("low") or [])
         if not closes:
             return None
-        return {"closes": closes, "volumes": volumes}
+        return {"closes": closes, "volumes": volumes, "highs": highs, "lows": lows}
     except Exception:
         return None
 
@@ -254,10 +256,14 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         ticker = _yf_ticker(quote)
         closes = _extract_series(batch, ticker, "Close")
         volumes = _extract_series(batch, ticker, "Volume")
+        highs = _extract_series(batch, ticker, "High")
+        lows = _extract_series(batch, ticker, "Low")
         if not closes and ticker in fallback_data:
             closes = fallback_data[ticker].get("closes", [])
             volumes = fallback_data[ticker].get("volumes", [])
-        data = _build_data_from_values(ticker, closes, volumes)
+            highs = fallback_data[ticker].get("highs", [])
+            lows = fallback_data[ticker].get("lows", [])
+        data = _build_data_from_values(ticker, closes, volumes, highs, lows)
         if not data:
             continue
 

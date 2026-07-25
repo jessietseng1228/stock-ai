@@ -1,6 +1,7 @@
 from typing import Dict, List
 
 SCORE_VERSION = "AI Score 2.0"
+TECH_VERSION = "Technical Engine v19.1"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -165,6 +166,12 @@ def reason_lines(data: Dict) -> List[str]:
     volume_ratio = float(data.get("volume_ratio", 0) or 0)
     volatility = float(data.get("volatility", 0) or 0)
     position_20d = float(data.get("position_20d", 50) or 50)
+    rsi14 = float(data.get("rsi14", 0) or 0)
+    macd = float(data.get("macd", 0) or 0)
+    macd_signal = float(data.get("macd_signal", 0) or 0)
+    macd_hist = float(data.get("macd_hist", 0) or 0)
+    atr_pct = float(data.get("atr_pct", 0) or 0)
+    ma20_slope_pct = float(data.get("ma20_slope_pct", 0) or 0)
 
     if price >= ma5 >= ma10 >= ma20 > 0:
         reasons.append("均線呈多頭排列")
@@ -172,6 +179,11 @@ def reason_lines(data: Dict) -> List[str]:
         reasons.append("股價站上20日均線")
     else:
         reasons.append("股價仍在20日均線下方")
+
+    if ma20_slope_pct > 0.15:
+        reasons.append(f"20日均線斜率向上 {ma20_slope_pct:.2f}%")
+    elif ma20_slope_pct < -0.15:
+        reasons.append(f"20日均線斜率向下 {ma20_slope_pct:.2f}%")
 
     if five_pct >= 6:
         reasons.append(f"近五日上漲 {five_pct:.1f}%")
@@ -189,6 +201,23 @@ def reason_lines(data: Dict) -> List[str]:
     elif volume_ratio > 0:
         reasons.append("成交量未明顯放大")
 
+    if rsi14 >= 70:
+        reasons.append(f"RSI {rsi14:.1f} 偏熱，留意追高")
+    elif rsi14 >= 55:
+        reasons.append(f"RSI {rsi14:.1f} 動能偏多")
+    elif 0 < rsi14 <= 40:
+        reasons.append(f"RSI {rsi14:.1f} 動能偏弱")
+
+    if macd > macd_signal and macd_hist > 0:
+        reasons.append("MACD 位於訊號線上方")
+    elif macd < macd_signal and macd_hist < 0:
+        reasons.append("MACD 動能偏弱")
+
+    if atr_pct >= 5:
+        reasons.append(f"ATR {atr_pct:.1f}%：短線波動高")
+    elif 0 < atr_pct <= 2.5:
+        reasons.append(f"ATR {atr_pct:.1f}%：波動相對穩定")
+
     if volatility <= 2.5:
         reasons.append("近期波動相對穩定")
     elif volatility >= 4:
@@ -199,7 +228,7 @@ def reason_lines(data: Dict) -> List[str]:
     elif position_20d > 95:
         reasons.append("接近20日高點，留意追高")
 
-    return reasons[:5]
+    return reasons[:7]
 
 
 def ai_comment(data: Dict) -> str:

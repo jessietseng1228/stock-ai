@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 import yfinance as yf
 
-from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, SCORE_VERSION
+from ai import ai_comment, score_stock, score_to_stars, trend_label, reason_lines, score_factors, factor_summary, SCORE_VERSION, TECH_VERSION
 
 CACHE_SECONDS = 60 * 10
 _CACHE: Dict[str, Tuple[float, Optional[Dict]]] = {}
@@ -152,8 +152,85 @@ def _ma(values: List[float], days: int) -> float:
     return sum(part) / len(part)
 
 
-def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Optional[List[int]] = None) -> Optional[Dict]:
+
+def _ema(values: List[float], days: int) -> List[float]:
+    """回傳與輸入等長的 EMA；資料不足時仍以首筆為起點。"""
+    if not values:
+        return []
+    alpha = 2 / (days + 1)
+    result = [float(values[0])]
+    for value in values[1:]:
+        result.append(alpha * float(value) + (1 - alpha) * result[-1])
+    return result
+
+
+def _rsi(values: List[float], days: int = 14) -> float:
+    if len(values) <= days:
+        return 50.0
+    gains: List[float] = []
+    losses: List[float] = []
+    for i in range(1, len(values)):
+        change = float(values[i]) - float(values[i - 1])
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+    avg_gain = sum(gains[:days]) / days
+    avg_loss = sum(losses[:days]) / days
+    for i in range(days, len(gains)):
+        avg_gain = ((avg_gain * (days - 1)) + gains[i]) / days
+        avg_loss = ((avg_loss * (days - 1)) + losses[i]) / days
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def _macd(values: List[float]) -> Tuple[float, float, float]:
+    if not values:
+        return 0.0, 0.0, 0.0
+    ema12 = _ema(values, 12)
+    ema26 = _ema(values, 26)
+    macd_line = [a - b for a, b in zip(ema12, ema26)]
+    signal_line = _ema(macd_line, 9)
+    macd = macd_line[-1]
+    signal = signal_line[-1]
+    return macd, signal, macd - signal
+
+
+def _atr(highs: List[float], lows: List[float], closes: List[float], days: int = 14) -> float:
+    count = min(len(highs), len(lows), len(closes))
+    if count < 2:
+        return 0.0
+    highs, lows, closes = highs[-count:], lows[-count:], closes[-count:]
+    true_ranges: List[float] = []
+    for i in range(1, count):
+        true_ranges.append(max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        ))
+    if not true_ranges:
+        return 0.0
+    atr = sum(true_ranges[:days]) / min(days, len(true_ranges))
+    for tr in true_ranges[days:]:
+        atr = ((atr * (days - 1)) + tr) / days
+    return atr
+
+
+def _ma_slope_pct(values: List[float], days: int, lookback: int = 5) -> float:
+    """比較目前均線與 lookback 個交易日前均線，換算每日平均百分比斜率。"""
+    if len(values) < days + lookback:
+        return 0.0
+    current = _ma(values, days)
+    previous = _ma(values[:-lookback], days)
+    if previous == 0:
+        return 0.0
+    return ((current - previous) / previous * 100) / lookback
+
+
+def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Optional[List[int]] = None, highs: Optional[List[float]] = None, lows: Optional[List[float]] = None) -> Optional[Dict]:
     closes = [float(x) for x in closes if x is not None]
+    highs = [float(x) for x in (highs or []) if x is not None]
+    lows = [float(x) for x in (lows or []) if x is not None]
     if not closes:
         return None
 
@@ -187,6 +264,13 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
     ma5 = _ma(closes, 5)
     ma10 = _ma(closes, 10)
     ma20 = _ma(closes, 20)
+    ma5_slope_pct = _ma_slope_pct(closes, 5)
+    ma10_slope_pct = _ma_slope_pct(closes, 10)
+    ma20_slope_pct = _ma_slope_pct(closes, 20)
+    rsi14 = _rsi(closes, 14)
+    macd, macd_signal, macd_hist = _macd(closes)
+    atr14 = _atr(highs, lows, closes, 14)
+    atr_pct = (atr14 / price * 100) if price else 0
     support = min(closes[-10:]) if len(closes) >= 10 else min(closes)
     resistance = max(closes[-10:]) if len(closes) >= 10 else max(closes)
     stop_loss = support * 0.98 if support else price * 0.95
@@ -211,6 +295,16 @@ def _build_data_from_values(yf_symbol: str, closes: List[float], volumes: Option
         "ma5": ma5,
         "ma10": ma10,
         "ma20": ma20,
+        "ma5_slope_pct": ma5_slope_pct,
+        "ma10_slope_pct": ma10_slope_pct,
+        "ma20_slope_pct": ma20_slope_pct,
+        "rsi14": rsi14,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "macd_hist": macd_hist,
+        "atr14": atr14,
+        "atr_pct": atr_pct,
+        "technical_version": TECH_VERSION,
         "support": support,
         "resistance": resistance,
         "stop_loss": stop_loss,
@@ -233,8 +327,10 @@ def _get_stock_data_by_yfinance(yf_symbol: str) -> Optional[Dict]:
     close = hist["Close"].dropna()
     if close.empty:
         return None
-    volumes = hist["Volume"].dropna().tolist() if "Volume" in hist else []
-    return _build_data_from_values(yf_symbol, close.tolist(), volumes)
+    volumes = hist["Volume"].tolist() if "Volume" in hist else []
+    highs = hist["High"].tolist() if "High" in hist else []
+    lows = hist["Low"].tolist() if "Low" in hist else []
+    return _build_data_from_values(yf_symbol, close.tolist(), volumes, highs, lows)
 
 
 def _get_stock_data_by_yahoo_chart(yf_symbol: str) -> Optional[Dict]:
@@ -251,7 +347,9 @@ def _get_stock_data_by_yahoo_chart(yf_symbol: str) -> Optional[Dict]:
     quote = (result[0].get("indicators", {}).get("quote") or [{}])[0]
     closes = quote.get("close") or []
     volumes = quote.get("volume") or []
-    return _build_data_from_values(yf_symbol, closes, volumes)
+    highs = quote.get("high") or []
+    lows = quote.get("low") or []
+    return _build_data_from_values(yf_symbol, closes, volumes, highs, lows)
 
 
 def get_stock_data(symbol: str, force_refresh: bool = False) -> Optional[Dict]:
@@ -292,6 +390,10 @@ def analyze_stock(symbol: str) -> str:
         f"漲跌：{arrow} {data['change']:.2f} ({data['change_pct']:.2f}%)\n"
         f"五日：{data['five_pct']:.2f}%\n"
         f"MA5 / MA10 / MA20：{data['ma5']:.2f} / {data['ma10']:.2f} / {data['ma20']:.2f}\n"
+        f"均線斜率(每日)：{data['ma5_slope_pct']:.2f}% / {data['ma10_slope_pct']:.2f}% / {data['ma20_slope_pct']:.2f}%\n"
+        f"RSI14：{data['rsi14']:.1f}\n"
+        f"MACD / Signal / Hist：{data['macd']:.2f} / {data['macd_signal']:.2f} / {data['macd_hist']:.2f}\n"
+        f"ATR14：{data['atr14']:.2f}（{data['atr_pct']:.2f}%）\n"
         f"支撐：{data['support']:.2f}\n"
         f"壓力：{data['resistance']:.2f}\n"
         f"停損參考：{data['stop_loss']:.2f}\n"
