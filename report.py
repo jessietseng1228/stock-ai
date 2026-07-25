@@ -4,7 +4,7 @@ from market_scan import get_saved_or_scan_top5, today_taipei
 from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
 from supabase_db import get_latest_ai_recommend_history
 
-DISCLAIMER = "提醒：v20.1 為量價與技術訊號決策輔助，不保證獲利，也不是投資建議。"
+DISCLAIMER = "提醒：v20.5 會依歷史 Day+5 表現做有限度校正，不保證獲利，也不是投資建議。"
 
 
 def _arrow(data: Dict) -> str:
@@ -88,7 +88,7 @@ def build_top5_report(symbols: List[str] = None) -> str:
             f"   理由：{reasons}"
         )
 
-    lines.append("\n提醒：Top5 由 v20.1 Decision Engine 產生，不使用自選清單。")
+    lines.append("\n提醒：Top5 由 v20.5 Decision + Learning Engine 產生，不使用自選清單。")
     lines.append(DISCLAIMER)
     return "\n".join(lines)
 
@@ -196,7 +196,10 @@ def _stock_box(data: Dict, rank: int = 0) -> Dict:
         "contents": [
             _text(title, "md", "bold"),
             _text(f"AI 3.0 {data['score']}分 {data['stars']}｜{plan['decision']}", "sm", "bold"),
-            _text(f"信心 {plan['confidence']}%｜型態 {plan['pattern']}", "xs", color="#555555"),
+            _text(
+                f"學習 {float(data.get('learning_adjustment', 0) or 0):+g}分｜信心 {plan['confidence']}%｜型態 {plan['pattern']}",
+                "xs", color="#555555"
+            ),
             _text(f"{data['price']:.2f}｜{arrow}{data['change_pct']:.2f}%｜5日 {data['five_pct']:.2f}%"),
             _text(f"買點 {plan['entry_low']:.2f}～{plan['entry_high']:.2f}｜停損 {data.get('stop_loss', 0):.2f}", "xs", color="#555555"),
             _text(f"目標 {plan['target1']:.2f}｜RR 1：{plan['rr']:.2f}", "xs", color="#555555"),
@@ -233,7 +236,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("🔥 今日 TOP5可買", "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.1｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 3.0＋Learning Engine v20.5｜掃描日期 {top5[0].get('scan_date') or today_taipei()}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))
@@ -255,7 +258,7 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
         _text(f"📈 {data['title']}", "xl", "bold"),
         _text(f"{data['price']:.2f}｜{arrow}{data['change']:.2f} ({data['change_pct']:.2f}%)", "md", "bold"),
         _text(f"AI 3.0：{data['score']}分 {data['stars']}｜{plan['decision']}", "sm", "bold"),
-        _text("Decision Engine v20.1｜操作決策・信心・買點・目標・RR", "xs", color="#666666"),
+        _text("Decision + Learning Engine v20.5｜歷史校正・操作決策・信心・RR", "xs", color="#666666"),
         _text(f"型態：{plan['pattern']}｜Confidence：{plan['confidence']}%", "xs", color="#555555"),
         _text(data.get("factor_summary") or factor_summary(data), "xs", color="#555555"),
         _text(data.get("technical_summary") or technical_summary(data), "xs", color="#555555"),

@@ -11,6 +11,7 @@ from supabase_db import (
     set_user_state,
     clear_user_state,
     parse_symbols,
+    get_completed_ai_learning_history,
 )
 from report import (
     build_morning_report,
@@ -25,11 +26,12 @@ from report import (
 )
 from market_scan import scan_market_top5, market_top5_status
 from performance_tracker import update_recommendation_performance
+from learning_engine import build_learning_profile, LEARNING_VERSION
 from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.1-stable"
+VERSION = "v20.5-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -220,6 +222,11 @@ def scan_top5():
         "score_version": result.get("score_version"),
         "history_saved_count": result.get("history_saved_count"),
         "history_error": result.get("history_error"),
+        "history_warning": result.get("history_warning"),
+        "learning_version": result.get("learning_version"),
+        "learning_ready": result.get("learning_ready"),
+        "learning_sample_count": result.get("learning_sample_count"),
+        "learning_min_samples": result.get("learning_min_samples"),
     })
 
 
@@ -231,6 +238,15 @@ def update_performance():
     result = update_recommendation_performance(limit=limit or 100)
     return jsonify({"version": VERSION, "job": "update_performance", **result})
 
+
+
+@app.route("/learning_status", methods=["GET"])
+def learning_status():
+    """查看 v20.5 歷史樣本、勝率及各分組表現。"""
+    limit = request.args.get("limit", default=2000, type=int)
+    rows = get_completed_ai_learning_history(limit=limit or 2000)
+    profile = build_learning_profile(rows)
+    return jsonify({"status": "ok", "version": VERSION, **profile})
 
 @app.route("/top5_status", methods=["GET"])
 def top5_status():

@@ -11,8 +11,12 @@ import requests
 import yfinance as yf
 
 from stock import _build_data_from_values, display_symbol
-from supabase_db import save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta, save_ai_recommend_history
-from ai import SCORE_VERSION
+from supabase_db import (
+    save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta,
+    save_ai_recommend_history, get_completed_ai_learning_history
+)
+from ai import SCORE_VERSION, score_to_stars, trend_label, trade_plan, decision_narrative
+from learning_engine import build_learning_profile, learning_adjustment, LEARNING_VERSION
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
@@ -246,6 +250,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     universe = get_market_universe()
     candidates = universe[:requested_limit]
     rows: List[Dict] = []
+    learning_rows = get_completed_ai_learning_history(limit=2000)
+    learning_profile = build_learning_profile(learning_rows)
 
     batch = _batch_download(candidates)
     batch_is_empty = bool(batch is None or getattr(batch, "empty", True))
@@ -282,6 +288,16 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["market"] = quote.get("market", "")
         data["turnover"] = quote.get("turnover", 0)
         data["scan_date"] = scan_date
+
+        # v20.5：以歷史 Day+5 表現做受控校正，最多加減 5 分。
+        learning = learning_adjustment(data, learning_profile)
+        data.update(learning)
+        data["score"] = learning["learned_score"]
+        data["stars"] = score_to_stars(data["score"])
+        data["trend"] = trend_label(data["score"])
+        data["trade_plan"] = trade_plan(data)
+        data.update(data["trade_plan"])
+        data["decision_narrative"] = decision_narrative(data)
         rows.append(data)
 
     rows.sort(key=lambda item: (item.get("score", 0), item.get("turnover", 0)), reverse=True)
@@ -298,6 +314,11 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "saved_count": saved_count,
         "history_saved_count": history_result.get("saved_count", 0),
         "history_error": history_result.get("error"),
+        "history_warning": history_result.get("warning"),
+        "learning_version": LEARNING_VERSION,
+        "learning_ready": learning_profile.get("ready", False),
+        "learning_sample_count": (learning_profile.get("overall") or {}).get("count", 0),
+        "learning_min_samples": learning_profile.get("min_samples"),
         "batch_empty": batch_is_empty,
         "fallback_count": len(fallback_data),
         "score_version": SCORE_VERSION,

@@ -160,7 +160,7 @@ def _encode_v20_plan(data: dict) -> str:
     if not plan:
         return str(data.get("trend") or "")
     payload = {
-        "v": "20.1",
+        "v": "20.5",
         "decision": plan.get("decision") or data.get("decision") or "",
         "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
         "pattern": plan.get("pattern") or data.get("pattern") or "",
@@ -169,6 +169,11 @@ def _encode_v20_plan(data: dict) -> str:
         "target1": float(plan.get("target1", data.get("target1", 0)) or 0),
         "target2": float(plan.get("target2", data.get("target2", 0)) or 0),
         "rr": float(plan.get("rr", data.get("rr", 0)) or 0),
+        "base_score": int(data.get("base_score", data.get("score", 0)) or 0),
+        "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
+        "learning_ready": bool(data.get("learning_ready", False)),
+        "learning_sample_count": int(data.get("learning_sample_count", 0) or 0),
+        "learning_version": data.get("learning_version") or "Learning Engine v20.5",
     }
     return "V20PLAN:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -260,6 +265,11 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
             "target2": float(plan.get("target2", 0) or 0),
             "rr": float(plan.get("rr", 0) or 0),
             "trade_plan": plan,
+            "base_score": int(plan.get("base_score", r.get("score", 0)) or 0),
+            "learning_adjustment": float(plan.get("learning_adjustment", 0) or 0),
+            "learning_ready": bool(plan.get("learning_ready", False)),
+            "learning_sample_count": int(plan.get("learning_sample_count", 0) or 0),
+            "learning_version": plan.get("learning_version") or "",
             "price": float(r.get("price", 0) or 0),
             "change": 0,
             "change_pct": float(r.get("change_pct", 0) or 0),
@@ -334,6 +344,14 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
             "risk_score": int(factors.get("risk", 0) or 0),
             "position_score": int(factors.get("position", 0) or 0),
             "entry_price": float(data.get("price", 0) or 0),
+            "base_score": int(data.get("base_score", data.get("score", 0)) or 0),
+            "confidence": int(data.get("confidence", (data.get("trade_plan") or {}).get("confidence", 0)) or 0),
+            "rr": float(data.get("rr", (data.get("trade_plan") or {}).get("rr", 0)) or 0),
+            "pattern": data.get("pattern") or (data.get("trade_plan") or {}).get("pattern") or "",
+            "decision": data.get("decision") or (data.get("trade_plan") or {}).get("decision") or "",
+            "technical_score": int(factors.get("technical", 0) or 0),
+            "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
+            "learning_version": data.get("learning_version") or "Learning Engine v20.5",
         })
 
     if not payload:
@@ -347,9 +365,42 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
         )
         return {"saved_count": len(res.data or payload)}
     except Exception as exc:
-        # 歷史表尚未建立時，不影響既有 Top5 掃描。
-        return {"saved_count": 0, "error": str(exc)}
+        # 若尚未執行 v20.5 SQL，先用舊欄位保存，不影響 Top5。
+        legacy_keys = {
+            "scan_date", "symbol", "name", "market", "rank", "score_version",
+            "ai_score", "trend_score", "momentum_score", "volume_score",
+            "risk_score", "position_score", "entry_price"
+        }
+        legacy_payload = [{k: v for k, v in row.items() if k in legacy_keys} for row in payload]
+        try:
+            res = (
+                supabase.table("ai_recommend_history")
+                .upsert(legacy_payload, on_conflict="scan_date,symbol")
+                .execute()
+            )
+            return {
+                "saved_count": len(res.data or legacy_payload),
+                "warning": "v20.5 learning columns missing; run sql/260726_v20_5_learning_engine.sql",
+            }
+        except Exception:
+            return {"saved_count": 0, "error": str(exc)}
 
+
+
+def get_completed_ai_learning_history(limit: int = 1000) -> list:
+    """取得已完成 Day+5 的歷史資料，供 Learning Engine 統計。"""
+    try:
+        res = (
+            supabase.table("ai_recommend_history")
+            .select("*")
+            .not_.is_("day5_return", "null")
+            .order("scan_date", desc=True)
+            .limit(max(1, min(limit, 5000)))
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
 
 def get_pending_ai_performance(limit: int = 100) -> list:
     """讀取尚未完成 Day+1 或 Day+5 的紀錄。"""
