@@ -31,7 +31,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.7-stable"
+VERSION = "v20.7.1-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"

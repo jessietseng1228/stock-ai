@@ -382,7 +382,12 @@ def get_saved_or_scan_top5(auto_scan: bool = False) -> List[Dict]:
     if rows:
         return rows
 
-    # 跨午夜、週末或休市日：顯示最近一次成功掃描，不再誤導使用者重跑。
+    # v20.7.1：今日已掃描但零入選時，不回退顯示昨日資料。
+    today_meta = get_market_top5_meta(scan_date)
+    if today_meta.get("has_result"):
+        return []
+
+    # 今日尚未掃描（例如午夜後、週末或休市日），才顯示最近一次成功結果。
     latest_rows = get_latest_market_top5(limit=5)
     if latest_rows:
         return latest_rows

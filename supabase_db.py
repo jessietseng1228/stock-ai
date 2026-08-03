@@ -201,6 +201,8 @@ def _decode_v20_plan(value) -> dict:
 # v17 market TOP5 results
 # =========================
 
+EMPTY_TOP5_SYMBOL = "__EMPTY__"
+
 def save_market_top5(scan_date: str, rows: list) -> int:
     """儲存每日市場掃描結果。需要先建立 market_top5_results table。"""
     if not scan_date:
@@ -237,6 +239,26 @@ def save_market_top5(scan_date: str, rows: list) -> int:
 
     if payload:
         supabase.table("market_top5_results").insert(payload).execute()
+    else:
+        # v20.7.1：即使今日零入選，也留下掃描完成標記。
+        # 這能區分「尚未掃描」與「已掃描但沒有合格標的」。
+        supabase.table("market_top5_results").insert({
+            "scan_date": scan_date,
+            "rank": 0,
+            "symbol": EMPTY_TOP5_SYMBOL,
+            "name": "NO_ELIGIBLE_RESULT",
+            "score": 0,
+            "stars": "",
+            "trend": "V20PLAN:{}",
+            "price": 0,
+            "change_pct": 0,
+            "five_pct": 0,
+            "support": 0,
+            "resistance": 0,
+            "stop_loss": 0,
+            "turnover": 0,
+            "reasons": [],
+        }).execute()
     return len(payload)
 
 
@@ -255,7 +277,10 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
 
     rows = []
     for r in res.data or []:
-        symbol = normalize_stock_id(str(r.get("symbol", "")))
+        raw_symbol = str(r.get("symbol", ""))
+        if raw_symbol == EMPTY_TOP5_SYMBOL:
+            continue
+        symbol = normalize_stock_id(raw_symbol)
         title = f"{symbol} {r.get('name')}" if r.get("name") else symbol
         plan = _decode_v20_plan(r.get("trend"))
         rows.append({
@@ -309,6 +334,7 @@ def get_latest_market_top5(limit: int = 5) -> list:
         date_res = (
             supabase.table("market_top5_results")
             .select("scan_date")
+            .neq("symbol", EMPTY_TOP5_SYMBOL)
             .order("scan_date", desc=True)
             .limit(1)
             .execute()
