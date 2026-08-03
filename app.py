@@ -31,7 +31,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.6-stable"
+VERSION = "v20.7-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -231,6 +231,7 @@ def scan_top5():
         "learning_ready": result.get("learning_ready"),
         "learning_sample_count": result.get("learning_sample_count"),
         "learning_min_samples": result.get("learning_min_samples"),
+        "decision_engine_version": result.get("decision_engine_version"),
     })
 
 

@@ -17,6 +17,7 @@ from supabase_db import (
 )
 from ai import SCORE_VERSION, score_to_stars, trend_label, trade_plan, decision_narrative
 from learning_engine import build_learning_profile, learning_adjustment, LEARNING_VERSION
+from decision_engine import apply_decision_engine, DECISION_ENGINE_VERSION
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
@@ -321,12 +322,17 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["trade_plan"] = trade_plan(data)
         data.update(data["trade_plan"])
         data["decision_narrative"] = decision_narrative(data)
+        decision_result = apply_decision_engine(data)
+        data.update(decision_result)
+        data["score"] = decision_result["final_score"]
+        data["stars"] = score_to_stars(data["score"])
+        data["trend"] = trend_label(data["score"])
         eligible, filter_reason = _top5_entry_filter(data)
         data["top5_eligible"] = eligible
         data["top5_filter_reason"] = filter_reason
         rows.append(data)
 
-    rows.sort(key=lambda item: (item.get("score", 0), item.get("turnover", 0)), reverse=True)
+    rows.sort(key=lambda item: (item.get("final_score", item.get("score", 0)), item.get("turnover", 0)), reverse=True)
     eligible_rows = [item for item in rows if item.get("top5_eligible")]
     excluded_rows = [item for item in rows if not item.get("top5_eligible")]
     stored_rows = eligible_rows[:DEFAULT_STORE_COUNT]
@@ -349,6 +355,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "learning_ready": learning_profile.get("ready", False),
         "learning_sample_count": (learning_profile.get("overall") or {}).get("count", 0),
         "learning_min_samples": learning_profile.get("min_samples"),
+        "decision_engine_version": DECISION_ENGINE_VERSION,
         "batch_empty": batch_is_empty,
         "fallback_count": len(fallback_data),
         "score_version": SCORE_VERSION,
@@ -359,6 +366,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
             {
                 "symbol": item.get("symbol"),
                 "score": item.get("score"),
+                "final_score": item.get("final_score"),
+                "risk_level": item.get("risk_level"),
                 "decision": (item.get("trade_plan") or {}).get("decision"),
                 "reason": item.get("top5_filter_reason"),
             }

@@ -160,7 +160,7 @@ def _encode_v20_plan(data: dict) -> str:
     if not plan:
         return str(data.get("trend") or "")
     payload = {
-        "v": "20.6",
+        "v": "20.7",
         "decision": plan.get("decision") or data.get("decision") or "",
         "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
         "pattern": plan.get("pattern") or data.get("pattern") or "",
@@ -174,6 +174,15 @@ def _encode_v20_plan(data: dict) -> str:
         "learning_ready": bool(data.get("learning_ready", False)),
         "learning_sample_count": int(data.get("learning_sample_count", 0) or 0),
         "learning_version": data.get("learning_version") or "Learning Engine v20.5",
+        "learned_score": int(data.get("learned_score", data.get("score", 0)) or 0),
+        "final_score": int(data.get("final_score", data.get("score", 0)) or 0),
+        "risk_points": int(data.get("risk_points", 0) or 0),
+        "risk_penalty": int(data.get("risk_penalty", 0) or 0),
+        "risk_level": data.get("risk_level") or "",
+        "risk_reasons": data.get("risk_reasons") or [],
+        "entry_quality_bonus": int(data.get("entry_quality_bonus", 0) or 0),
+        "entry_quality_reasons": data.get("entry_quality_reasons") or [],
+        "decision_engine_version": data.get("decision_engine_version") or "Decision Engine v20.7",
     }
     return "V20PLAN:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -270,6 +279,15 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
             "learning_ready": bool(plan.get("learning_ready", False)),
             "learning_sample_count": int(plan.get("learning_sample_count", 0) or 0),
             "learning_version": plan.get("learning_version") or "",
+            "learned_score": int(plan.get("learned_score", r.get("score", 0)) or 0),
+            "final_score": int(plan.get("final_score", r.get("score", 0)) or 0),
+            "risk_points": int(plan.get("risk_points", 0) or 0),
+            "risk_penalty": int(plan.get("risk_penalty", 0) or 0),
+            "risk_level": plan.get("risk_level") or "",
+            "risk_reasons": plan.get("risk_reasons") or [],
+            "entry_quality_bonus": int(plan.get("entry_quality_bonus", 0) or 0),
+            "entry_quality_reasons": plan.get("entry_quality_reasons") or [],
+            "decision_engine_version": plan.get("decision_engine_version") or "",
             "price": float(r.get("price", 0) or 0),
             "change": 0,
             "change_pct": float(r.get("change_pct", 0) or 0),
