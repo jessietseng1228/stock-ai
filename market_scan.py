@@ -29,6 +29,29 @@ YF_PERIOD = os.getenv("TOP5_YF_PERIOD", "3mo")
 YF_TIMEOUT = max(10, int(os.getenv("TOP5_YF_TIMEOUT", "25")))
 
 
+TOP5_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
+
+
+def _top5_entry_filter(data: Dict) -> tuple[bool, str]:
+    """v20.6 Top5 硬門檻：只有目前具備進場條件的股票才可入選。"""
+    plan = data.get("trade_plan") or {}
+    decision = str(plan.get("decision") or data.get("decision") or "").strip()
+    rr = float(plan.get("rr", data.get("rr", 0)) or 0)
+    entry_low = float(plan.get("entry_low", data.get("entry_low", 0)) or 0)
+    entry_high = float(plan.get("entry_high", data.get("entry_high", 0)) or 0)
+    stop_loss = float(data.get("stop_loss", 0) or 0)
+
+    if decision not in TOP5_ALLOWED_DECISIONS:
+        return False, f"決策排除：{decision or '無明確進場決策'}"
+    if rr < 1.0:
+        return False, f"風險報酬比不足：{rr:.2f}"
+    if entry_low <= 0 or entry_high < entry_low:
+        return False, "買點區間無效"
+    if stop_loss <= 0 or stop_loss >= entry_low:
+        return False, "停損位置無效"
+    return True, "符合進場條件"
+
+
 def today_taipei() -> str:
     return datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d")
 
@@ -298,10 +321,15 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["trade_plan"] = trade_plan(data)
         data.update(data["trade_plan"])
         data["decision_narrative"] = decision_narrative(data)
+        eligible, filter_reason = _top5_entry_filter(data)
+        data["top5_eligible"] = eligible
+        data["top5_filter_reason"] = filter_reason
         rows.append(data)
 
     rows.sort(key=lambda item: (item.get("score", 0), item.get("turnover", 0)), reverse=True)
-    stored_rows = rows[:DEFAULT_STORE_COUNT]
+    eligible_rows = [item for item in rows if item.get("top5_eligible")]
+    excluded_rows = [item for item in rows if not item.get("top5_eligible")]
+    stored_rows = eligible_rows[:DEFAULT_STORE_COUNT]
     saved_count = save_market_top5(scan_date, stored_rows) if save else 0
     history_result = save_ai_recommend_history(scan_date, stored_rows, limit=5) if save else {"saved_count": 0}
 
@@ -311,6 +339,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "universe_count": len(universe),
         "candidate_count": len(candidates),
         "scored_count": len(rows),
+        "eligible_count": len(eligible_rows),
+        "excluded_count": len(excluded_rows),
         "saved_count": saved_count,
         "history_saved_count": history_result.get("saved_count", 0),
         "history_error": history_result.get("error"),
@@ -325,6 +355,15 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "batch_rows": int(getattr(batch, "shape", (0, 0))[0]) if batch is not None else 0,
         "batch_columns": int(getattr(batch, "shape", (0, 0))[1]) if batch is not None else 0,
         "top5": stored_rows[:5],
+        "excluded_preview": [
+            {
+                "symbol": item.get("symbol"),
+                "score": item.get("score"),
+                "decision": (item.get("trade_plan") or {}).get("decision"),
+                "reason": item.get("top5_filter_reason"),
+            }
+            for item in excluded_rows[:10]
+        ],
     }
 
 

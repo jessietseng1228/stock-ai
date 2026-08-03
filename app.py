@@ -31,7 +31,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.5-stable"
+VERSION = "v20.6-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -214,7 +214,11 @@ def scan_top5():
         "scan_date": result.get("scan_date"),
         "candidate_count": result.get("candidate_count"),
         "scored_count": result.get("scored_count"),
+        "eligible_count": result.get("eligible_count"),
+        "excluded_count": result.get("excluded_count"),
         "saved_count": result.get("saved_count"),
+        "top5": result.get("top5"),
+        "excluded_preview": result.get("excluded_preview"),
         "batch_empty": result.get("batch_empty"),
         "batch_rows": result.get("batch_rows"),
         "batch_columns": result.get("batch_columns"),
@@ -242,7 +246,7 @@ def update_performance():
 
 @app.route("/learning_status", methods=["GET"])
 def learning_status():
-    """查看 v20.5 歷史樣本、勝率及各分組表現。"""
+    """查看歷史樣本、勝率及各分組表現。"""
     limit = request.args.get("limit", default=2000, type=int)
     rows = get_completed_ai_learning_history(limit=limit or 2000)
     profile = build_learning_profile(rows)

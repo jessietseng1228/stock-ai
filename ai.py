@@ -1,7 +1,7 @@
 from typing import Dict, List
 
 SCORE_VERSION = "AI Score 3.0"
-TECH_VERSION = "Decision + Learning Engine v20.5"
+TECH_VERSION = "Decision + Learning Engine v20.6"
 
 
 def _clamp(value: float, low: float, high: float) -> float:

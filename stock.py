@@ -434,6 +434,13 @@ def _is_top5_eligible(data: Dict) -> bool:
         return False
     if five_pct <= -12:
         return False
+
+    plan = data.get("trade_plan") or trade_plan(data)
+    decision = str(plan.get("decision") or "").strip()
+    if decision not in {"🟢 可分批布局", "🔵 突破確認後布局"}:
+        return False
+    if float(plan.get("rr", 0) or 0) < 1.0:
+        return False
     return True
 
 

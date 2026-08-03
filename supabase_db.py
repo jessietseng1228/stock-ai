@@ -160,7 +160,7 @@ def _encode_v20_plan(data: dict) -> str:
     if not plan:
         return str(data.get("trend") or "")
     payload = {
-        "v": "20.5",
+        "v": "20.6",
         "decision": plan.get("decision") or data.get("decision") or "",
         "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
         "pattern": plan.get("pattern") or data.get("pattern") or "",
