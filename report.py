@@ -4,7 +4,7 @@ from market_scan import get_saved_or_scan_top5, today_taipei, market_top5_status
 from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
 from supabase_db import get_latest_ai_recommend_history
 
-DISCLAIMER = "提醒：v20.7.1 綜合進場條件、歷史學習與風險排序；結果不保證獲利，也不是投資建議。"
+DISCLAIMER = "提醒：v20.7.2 採每日正式 Top5 快照；結果不保證獲利，也不是投資建議。"
 
 
 def _arrow(data: Dict) -> str:
@@ -84,7 +84,7 @@ def build_top5_report(symbols: List[str] = None) -> str:
                 "今日建議：保留現金，等待更明確的進場機會。\n\n"
                 "提醒：系統不會為了湊滿五檔而加入等待回檔、避免追高或持續觀察的股票。"
             )
-        return "⏳ 今日尚未完成市場掃描。請先執行 /scan_top5，或等待排程完成。"
+        return "⏳ 今日尚未完成市場掃描。請等待正式 /scan_top5_cron 排程完成；/scan_top5 僅供預覽，不會寫入正式結果。"
 
     result_date = top5[0].get("scan_date") or today_taipei()
     is_today = str(result_date) == str(today_taipei())
@@ -257,7 +257,7 @@ def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
     heading = "🔥 今日 TOP5可買" if is_today else "📚 最近一次 Top5"
     contents = [
         _text(heading, "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.7.1｜掃描日期 {result_date}", "xs", color="#666666"),
+        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.7.2｜掃描日期 {result_date}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))

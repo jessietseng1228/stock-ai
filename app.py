@@ -24,14 +24,14 @@ from report import (
     build_ai_history_report,
     build_ai_history_flex,
 )
-from market_scan import scan_market_top5, market_top5_status
+from market_scan import scan_market_top5, market_top5_status, get_saved_or_scan_top5
 from performance_tracker import update_recommendation_performance
 from learning_engine import build_learning_profile, LEARNING_VERSION
 from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.7.1-stable"
+VERSION = "v20.7.2-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -201,16 +201,13 @@ def manual_push_morning_report():
     return cron_push_morning_report()
 
 
-@app.route("/scan_top5", methods=["GET", "POST"])
-@app.route("/scan_top5_cron", methods=["GET", "POST"])
-def scan_top5():
-    """v17.4 Stable：手動與 Cron 共用的同步批次抓價掃描。"""
-    limit = request.args.get("limit", default=None, type=int)
-    result = scan_market_top5(limit=limit or 60, save=True)
+def _scan_response(result: dict, job: str, mode: str, locked: bool = False):
     return jsonify({
         "status": "ok",
         "version": VERSION,
-        "job": "scan_top5",
+        "job": job,
+        "mode": mode,
+        "locked": locked,
         "scan_date": result.get("scan_date"),
         "candidate_count": result.get("candidate_count"),
         "scored_count": result.get("scored_count"),
@@ -232,7 +229,46 @@ def scan_top5():
         "learning_sample_count": result.get("learning_sample_count"),
         "learning_min_samples": result.get("learning_min_samples"),
         "decision_engine_version": result.get("decision_engine_version"),
+        "message": result.get("message"),
     })
+
+
+@app.route("/scan_top5", methods=["GET", "POST"])
+def scan_top5_preview():
+    """v20.7.2：手動掃描預設僅預覽，不寫入正式 Top5。"""
+    limit = request.args.get("limit", default=None, type=int)
+    result = scan_market_top5(limit=limit or 60, save=False)
+    result["saved_count"] = 0
+    result["history_saved_count"] = 0
+    result["message"] = "預覽模式：未寫入 Supabase，不影響正式 Top5。"
+    return _scan_response(result, "scan_top5_preview", "preview", locked=False)
+
+
+@app.route("/scan_top5_cron", methods=["GET", "POST"])
+def scan_top5_cron():
+    """v20.7.2：正式每日快照；同一天第一次成功後鎖定。"""
+    limit = request.args.get("limit", default=None, type=int)
+    force = str(request.args.get("force", "0")).strip().lower() in {"1", "true", "yes"}
+    status = market_top5_status()
+
+    if status.get("has_result") and not force:
+        rows = get_saved_or_scan_top5(auto_scan=False)
+        result = {
+            "scan_date": status.get("scan_date"),
+            "candidate_count": None,
+            "scored_count": None,
+            "eligible_count": len(rows),
+            "excluded_count": None,
+            "saved_count": 0,
+            "top5": rows,
+            "history_saved_count": 0,
+            "message": "今日正式 Top5 已鎖定，本次未重新掃描或覆蓋。",
+        }
+        return _scan_response(result, "scan_top5_cron", "official", locked=True)
+
+    result = scan_market_top5(limit=limit or 60, save=True)
+    result["message"] = "正式 Top5 已建立並鎖定。" if not force else "已使用 force=1 強制重算正式 Top5。"
+    return _scan_response(result, "scan_top5_cron", "official_force" if force else "official", locked=True)
 
 
 @app.route("/update_performance", methods=["GET", "POST"])
