@@ -304,41 +304,35 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
 
 def build_performance_report(limit: int = 2000) -> str:
     rows = get_ai_performance_history(limit=limit)
-    analytics = build_performance_analytics(rows)
-    day1 = analytics["day1"]
-    day5 = analytics["day5"]
-
+    a = build_performance_analytics(rows)
+    cur, hist, clean = a["current_strategy"], a["all_history"], a["clean_learning"]
+    d1, d5 = cur["day1"], cur["day5"]
     lines = [
-        "📊 AI Top5 績效驗證｜v20.8",
-        "────────────",
-        f"歷史推薦：{analytics['total_history_count']} 筆",
-        f"Day+1：{day1['count']} 筆｜勝率 {day1['win_rate']:.1f}%｜均報酬 {day1['avg_return']:+.2f}%",
-        f"Day+5：{day5['count']} 筆｜勝率 {day5['win_rate']:.1f}%｜均報酬 {day5['avg_return']:+.2f}%",
+        "📊 AI Top5 績效驗證｜v20.8.1", "────────────",
+        "【現行策略樣本】",
+        f"正式樣本：{cur['total_count']} 筆",
+        f"Day+1：{d1['count']} 筆｜勝率 {d1['win_rate']:.1f}%｜均報酬 {d1['avg_return']:+.2f}%",
+        f"Day+5：{d5['count']} 筆｜勝率 {d5['win_rate']:.1f}%｜均報酬 {d5['avg_return']:+.2f}%",
+        "", "【歷史全部樣本｜僅供參考】",
+        f"歷史推薦：{hist['total_count']} 筆",
+        f"Day+5：{hist['day5']['count']} 筆｜勝率 {hist['day5']['win_rate']:.1f}%｜均報酬 {hist['day5']['avg_return']:+.2f}%",
+        f"Legacy 排除：{a['legacy_count']} 筆",
+        "", f"【Clean Learning Sample】{clean['total_count']} 筆",
     ]
-
-    buckets = analytics.get("score_buckets") or {}
+    buckets = cur.get("score_buckets") or {}
     if buckets:
-        lines.extend(["", "AI Base Score → Day+5："])
-        order = ["90+", "85-89", "80-84", "75-79", "<75"]
-        for key in order:
-            stat = buckets.get(key)
-            if not stat or not stat.get("count"):
-                continue
-            lines.append(
-                f"• {key}：{stat['count']}筆｜勝率 {stat['win_rate']:.1f}%｜均報酬 {stat['avg_return']:+.2f}%"
-            )
-
-    worst = analytics.get("worst_cases") or []
+        lines.append("現行策略 Base Score → Day+5：")
+        for key in ["90+","85-89","80-84","75-79","<75"]:
+            st=buckets.get(key)
+            if st and st.get("count"):
+                lines.append(f"• {key}：{st['count']}筆｜勝率 {st['win_rate']:.1f}%｜均報酬 {st['avg_return']:+.2f}%")
+    worst=cur.get("worst_cases") or []
     if worst:
-        lines.extend(["", "近期失敗案例觀察："])
-        for row in worst[:3]:
-            title = f"{row.get('symbol')} {row.get('name') or ''}".strip()
-            lines.append(
-                f"• {row.get('scan_date')} {title}｜Base {row.get('base_score')}｜Day+5 {row.get('day5_return'):+.2f}%"
-            )
-
-    if day5["count"] < 10:
-        lines.extend(["", "⚠️ Day+5 樣本仍少於 10 筆，目前數字只供觀察，不建議據此大幅調整權重。"])
-
-    lines.extend(["────────────", DISCLAIMER])
+        lines.extend(["", "近期現行策略失敗案例："])
+        for r in worst[:3]:
+            title=f"{r.get('symbol')} {r.get('name') or ''}".strip()
+            lines.append(f"• {r.get('scan_date')} {title}｜Base {r.get('base_score')}｜Day+5 {r.get('day5_return'):+.2f}%")
+    lines.extend(["", "⚠️ Legacy 資料不納入 Learning Engine 權重調整。",
+                  "v20.8.1 僅驗證績效，目前不自動修改 AI 評分權重。", "────────────",
+                  "提醒：績效統計為歷史驗證，不保證未來獲利，也不是投資建議。"] )
     return "\n".join(lines)
