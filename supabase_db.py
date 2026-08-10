@@ -472,6 +472,21 @@ def update_ai_performance(row_id: int, values: dict) -> bool:
         return False
 
 
+
+def get_ai_performance_history(limit: int = 2000) -> list:
+    """取得 Top5 歷史績效資料，供 v20.8 Performance Analytics 使用。"""
+    try:
+        res = (
+            supabase.table("ai_recommend_history")
+            .select("*")
+            .order("scan_date", desc=True)
+            .limit(max(1, min(limit, 5000)))
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
+
 def get_latest_ai_recommend_history(limit: int = 5) -> list:
     """取得最近一次 Top5 推薦歷史，供 LINE「AI歷史」查詢。"""
     try:

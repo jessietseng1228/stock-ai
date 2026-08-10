@@ -12,6 +12,7 @@ from supabase_db import (
     clear_user_state,
     parse_symbols,
     get_completed_ai_learning_history,
+    get_ai_performance_history,
 )
 from report import (
     build_morning_report,
@@ -23,15 +24,17 @@ from report import (
     build_single_flex,
     build_ai_history_report,
     build_ai_history_flex,
+    build_performance_report,
 )
 from market_scan import scan_market_top5, market_top5_status, get_saved_or_scan_top5
 from performance_tracker import update_recommendation_performance
 from learning_engine import build_learning_profile, LEARNING_VERSION
+from performance_analytics import build_performance_analytics, ANALYTICS_VERSION
 from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.7.2-stable"
+VERSION = "v20.8-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -44,9 +47,10 @@ CMD_DELETE = {"刪股票", "刪除股票", "➖ 刪股票", "action=delete_stock
 CMD_TOP5 = {"TOP5可買", "🔥 TOP5可買", "top5", "action=top5"}
 CMD_ANALYZE = {"個股分析", "📈 個股分析", "analyze", "action=analyze"}
 CMD_AI_HISTORY = {"AI歷史", "AI推薦歷史", "ai_history", "action=ai_history"}
+CMD_PERFORMANCE = {"AI績效", "績效驗證", "performance", "action=performance"}
 CMD_CANCEL = {"取消", "cancel", "離開"}
 CMD_DELETE_ALL = {"ALL", "DEL ALL", "DELETE ALL", "全部刪除", "清空", "清空自選"}
-ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_AI_HISTORY | CMD_CANCEL
+ALL_COMMANDS = CMD_MORNING | CMD_LIST | CMD_ADD | CMD_DELETE | CMD_TOP5 | CMD_ANALYZE | CMD_AI_HISTORY | CMD_PERFORMANCE | CMD_CANCEL
 
 # v17.4 Stable：不使用背景 thread；Top5 掃描由單一同步 Cron 完成。
 
@@ -142,6 +146,11 @@ def handle_line_event(event: dict) -> None:
         clear_user_state(user_id)
         alt, flex, fallback = build_ai_history_flex()
         reply_flex(reply_token, alt, flex, fallback)
+        return
+
+    if text in CMD_PERFORMANCE:
+        clear_user_state(user_id)
+        reply_text(reply_token, build_performance_report())
         return
 
     if text in CMD_ANALYZE:
@@ -288,6 +297,20 @@ def learning_status():
     rows = get_completed_ai_learning_history(limit=limit or 2000)
     profile = build_learning_profile(rows)
     return jsonify({"status": "ok", "version": VERSION, **profile})
+
+
+@app.route("/performance_status", methods=["GET"])
+def performance_status():
+    """v20.8：Top5 Day+1 / Day+5 勝率、分數分層、失敗案例與因子觀察。"""
+    limit = request.args.get("limit", default=2000, type=int)
+    rows = get_ai_performance_history(limit=limit or 2000)
+    analytics = build_performance_analytics(rows)
+    return jsonify({"status": "ok", "version": VERSION, **analytics})
+
+
+@app.route("/performance", methods=["GET"])
+def performance_page():
+    return build_performance_report(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @app.route("/top5_status", methods=["GET"])
 def top5_status():

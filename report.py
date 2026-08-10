@@ -2,9 +2,10 @@ from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
 from market_scan import get_saved_or_scan_top5, today_taipei, market_top5_status
 from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
-from supabase_db import get_latest_ai_recommend_history
+from supabase_db import get_latest_ai_recommend_history, get_ai_performance_history
+from performance_analytics import build_performance_analytics
 
-DISCLAIMER = "提醒：v20.7.2 採每日正式 Top5 快照；結果不保證獲利，也不是投資建議。"
+DISCLAIMER = "提醒：v20.8 採每日正式 Top5 快照；績效統計為歷史驗證，不保證未來獲利，也不是投資建議。"
 
 
 def _arrow(data: Dict) -> str:
@@ -299,3 +300,45 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
     contents += [_text(ai_comment(data), "xs", color="#555555"), _text(DISCLAIMER, "xs", color="#888888")]
     flex = {"type": "bubble", "body": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": contents}}
     return f"個股分析 {data['symbol']}", flex, fallback
+
+
+def build_performance_report(limit: int = 2000) -> str:
+    rows = get_ai_performance_history(limit=limit)
+    analytics = build_performance_analytics(rows)
+    day1 = analytics["day1"]
+    day5 = analytics["day5"]
+
+    lines = [
+        "📊 AI Top5 績效驗證｜v20.8",
+        "────────────",
+        f"歷史推薦：{analytics['total_history_count']} 筆",
+        f"Day+1：{day1['count']} 筆｜勝率 {day1['win_rate']:.1f}%｜均報酬 {day1['avg_return']:+.2f}%",
+        f"Day+5：{day5['count']} 筆｜勝率 {day5['win_rate']:.1f}%｜均報酬 {day5['avg_return']:+.2f}%",
+    ]
+
+    buckets = analytics.get("score_buckets") or {}
+    if buckets:
+        lines.extend(["", "AI Base Score → Day+5："])
+        order = ["90+", "85-89", "80-84", "75-79", "<75"]
+        for key in order:
+            stat = buckets.get(key)
+            if not stat or not stat.get("count"):
+                continue
+            lines.append(
+                f"• {key}：{stat['count']}筆｜勝率 {stat['win_rate']:.1f}%｜均報酬 {stat['avg_return']:+.2f}%"
+            )
+
+    worst = analytics.get("worst_cases") or []
+    if worst:
+        lines.extend(["", "近期失敗案例觀察："])
+        for row in worst[:3]:
+            title = f"{row.get('symbol')} {row.get('name') or ''}".strip()
+            lines.append(
+                f"• {row.get('scan_date')} {title}｜Base {row.get('base_score')}｜Day+5 {row.get('day5_return'):+.2f}%"
+            )
+
+    if day5["count"] < 10:
+        lines.extend(["", "⚠️ Day+5 樣本仍少於 10 筆，目前數字只供觀察，不建議據此大幅調整權重。"])
+
+    lines.extend(["────────────", DISCLAIMER])
+    return "\n".join(lines)
