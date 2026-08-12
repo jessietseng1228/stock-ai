@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable, Dict, Iterable, List
 
-ANALYTICS_VERSION = "Performance Analytics v20.8.1"
+ANALYTICS_VERSION = "Performance Analytics v20.9"
 CURRENT_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
 FACTOR_FIELDS = ("trend_score", "momentum_score", "volume_score", "risk_score", "position_score", "technical_score")
 

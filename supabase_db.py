@@ -160,7 +160,7 @@ def _encode_v20_plan(data: dict) -> str:
     if not plan:
         return str(data.get("trend") or "")
     payload = {
-        "v": "20.7",
+        "v": "20.9",
         "decision": plan.get("decision") or data.get("decision") or "",
         "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
         "pattern": plan.get("pattern") or data.get("pattern") or "",
@@ -172,8 +172,11 @@ def _encode_v20_plan(data: dict) -> str:
         "base_score": int(data.get("base_score", data.get("score", 0)) or 0),
         "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
         "learning_ready": bool(data.get("learning_ready", False)),
+        "learning_mode": data.get("learning_mode") or "collecting",
+        "shadow_adjustment": float(data.get("shadow_adjustment", 0) or 0),
+        "shadow_score": int(data.get("shadow_score", data.get("base_score", data.get("score", 0))) or 0),
         "learning_sample_count": int(data.get("learning_sample_count", 0) or 0),
-        "learning_version": data.get("learning_version") or "Learning Engine v20.5",
+        "learning_version": data.get("learning_version") or "Learning Engine v20.9",
         "learned_score": int(data.get("learned_score", data.get("score", 0)) or 0),
         "final_score": int(data.get("final_score", data.get("score", 0)) or 0),
         "risk_points": int(data.get("risk_points", 0) or 0),
@@ -395,7 +398,7 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
             "decision": data.get("decision") or (data.get("trade_plan") or {}).get("decision") or "",
             "technical_score": int(factors.get("technical", 0) or 0),
             "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
-            "learning_version": data.get("learning_version") or "Learning Engine v20.5",
+            "learning_version": data.get("learning_version") or "Learning Engine v20.9",
         })
 
     if not payload:
