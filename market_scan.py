@@ -511,7 +511,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["market_regime"] = regime_info.get("regime", "UNKNOWN")
         data["market_regime_reason"] = regime_info.get("reason", "")
 
-        # v20.5：以歷史 Day+5 表現做受控校正，最多加減 5 分。
+        # v21.1：Dual Learning Engine（Decision + Factor）先做 Shadow；雙 Gate 通過才套用正式校正。
         learning = learning_adjustment(data, learning_profile)
         data.update(learning)
         data["score"] = learning["learned_score"]
@@ -556,6 +556,9 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "learning_shadow_min_samples": learning_profile.get("shadow_min_samples"),
         "learning_mode": learning_profile.get("mode"),
         "learning_guard": learning_profile.get("learning_guard"),
+        "dual_learning_gate": learning_profile.get("dual_learning_gate"),
+        "decision_learning": learning_profile.get("decision_learning"),
+        "factor_learning": learning_profile.get("factor_learning"),
         "duplicate_excluded_count": learning_profile.get("duplicate_excluded_count", 0),
         "market_regime": regime_info.get("regime", "UNKNOWN"),
         "market_regime_reason": regime_info.get("reason", ""),

@@ -34,7 +34,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v21.0.2-diagnostics"
+VERSION = "v21.1-dual-learning"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
