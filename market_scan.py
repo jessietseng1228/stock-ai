@@ -269,33 +269,198 @@ def _batch_download(candidates: List[Dict]):
 
 
 
+def _extract_yf_taiex_history(frame) -> tuple[List[float], List[str]]:
+    """Return aligned TAIEX close/date lists from yfinance output."""
+    if frame is None or getattr(frame, "empty", True):
+        return [], []
+    try:
+        closes_series = None
+        columns = getattr(frame, "columns", None)
+        if getattr(columns, "nlevels", 1) > 1:
+            for key in [("Close", "^TWII"), ("^TWII", "Close")]:
+                try:
+                    closes_series = frame[key]
+                    break
+                except Exception:
+                    pass
+        else:
+            try:
+                closes_series = frame["Close"]
+            except Exception:
+                closes_series = None
+        if closes_series is None:
+            return [], []
+        values, dates = [], []
+        for idx, value in closes_series.items():
+            try:
+                value = float(value)
+                if math.isnan(value) or value <= 0:
+                    continue
+                dt = idx.to_pydatetime() if hasattr(idx, "to_pydatetime") else idx
+                date_text = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(idx)[:10]
+                values.append(value)
+                dates.append(date_text)
+            except Exception:
+                continue
+        return values, dates
+    except Exception:
+        return [], []
+
+
+def _month_starts_back(months: int = 6) -> List[datetime]:
+    now = datetime.now(TAIPEI_TZ)
+    year, month = now.year, now.month
+    out = []
+    for offset in range(max(1, months)):
+        m = month - offset
+        y = year
+        while m <= 0:
+            m += 12
+            y -= 1
+        out.append(datetime(y, m, 1, tzinfo=TAIPEI_TZ))
+    return out
+
+
+def _roc_date_to_iso(value: str) -> str:
+    """TWSE history uses ROC dates such as 115/08/28."""
+    text = str(value or "").strip()
+    parts = re.split(r"[/.-]", text)
+    if len(parts) != 3:
+        return text
+    try:
+        year, month, day = (int(x) for x in parts)
+        if year < 1911:
+            year += 1911
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    except Exception:
+        return text
+
+
+def _fetch_taiex_from_twse(months: int = 6) -> tuple[List[float], List[str], str]:
+    """Official TWSE monthly TAIEX history fallback when Yahoo returns no data."""
+    rows_by_date: Dict[str, float] = {}
+    errors: List[str] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; StockAI/21.0.1)",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    for month_start in _month_starts_back(months):
+        date_param = month_start.strftime("%Y%m01")
+        url = "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
+        try:
+            resp = requests.get(
+                url,
+                params={"date": date_param, "response": "json"},
+                headers=headers,
+                timeout=YF_TIMEOUT,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            fields = [str(x) for x in (payload.get("fields") or [])]
+            data = payload.get("data") or []
+            # Standard fields: 日期 / 開盤指數 / 最高指數 / 最低指數 / 收盤指數
+            close_idx = next((i for i, name in enumerate(fields) if "收盤" in name), 4 if len(fields) > 4 else -1)
+            date_idx = next((i for i, name in enumerate(fields) if "日期" in name), 0)
+            if close_idx < 0:
+                errors.append(f"{date_param}:close-field-missing")
+                continue
+            for row in data:
+                try:
+                    iso_date = _roc_date_to_iso(row[date_idx])
+                    close = _to_number(row[close_idx])
+                    if iso_date and close > 0:
+                        rows_by_date[iso_date] = close
+                except Exception:
+                    continue
+        except Exception as exc:
+            errors.append(f"{date_param}:{type(exc).__name__}")
+    dates = sorted(rows_by_date)
+    closes = [rows_by_date[d] for d in dates]
+    return closes, dates, ";".join(errors[-3:])
+
+
 def detect_market_regime() -> Dict:
-    """v21.0: use TAIEX trend/momentum to classify market regime. Shadow-only in v21.0."""
+    """v21.0.1: TAIEX regime with Yahoo -> Ticker.history -> official TWSE fallback."""
+    closes: List[float] = []
+    dates: List[str] = []
+    source = ""
+    source_notes: List[str] = []
+
+    # 1) Existing Yahoo batch path.
     try:
         frame = yf.download(
-            tickers="^TWII", period="6mo", interval="1d", auto_adjust=False,
+            tickers="^TWII", period="1y", interval="1d", auto_adjust=False,
             progress=False, threads=False, timeout=YF_TIMEOUT,
         )
-        closes = _extract_series(frame, "^TWII", "Close")
-        if len(closes) < 60:
-            return {"regime": "UNKNOWN", "reason": f"TAIEX資料不足({len(closes)}日)", "close": closes[-1] if closes else 0}
-        close = float(closes[-1])
-        ma20 = sum(closes[-20:]) / 20
-        ma60 = sum(closes[-60:]) / 60
-        ret5 = (close / closes[-6] - 1) * 100 if len(closes) >= 6 and closes[-6] else 0.0
-        if close > ma20 > ma60 and ret5 > -1.0:
-            regime = "BULL"
-        elif close < ma20 < ma60 and ret5 < 1.0:
-            regime = "BEAR"
+        closes, dates = _extract_yf_taiex_history(frame)
+        if closes:
+            source = "yfinance.download"
         else:
-            regime = "NEUTRAL"
-        reason = f"TAIEX {close:.2f} / MA20 {ma20:.2f} / MA60 {ma60:.2f} / 5D {ret5:+.2f}%"
-        return {
-            "regime": regime, "reason": reason, "close": round(close, 2),
-            "ma20": round(ma20, 2), "ma60": round(ma60, 2), "return_5d": round(ret5, 3),
-        }
+            source_notes.append("yfinance.download=0")
     except Exception as exc:
-        return {"regime": "UNKNOWN", "reason": f"Regime判斷失敗: {exc}"}
+        source_notes.append(f"yfinance.download={type(exc).__name__}")
+
+    # 2) Yahoo's alternate history path. Some Render/Yahoo combinations fail only on download().
+    if len(closes) < 60:
+        try:
+            frame = yf.Ticker("^TWII").history(period="1y", interval="1d", auto_adjust=False)
+            alt_closes, alt_dates = _extract_yf_taiex_history(frame)
+            if len(alt_closes) > len(closes):
+                closes, dates = alt_closes, alt_dates
+                source = "yfinance.Ticker.history"
+            if not alt_closes:
+                source_notes.append("Ticker.history=0")
+        except Exception as exc:
+            source_notes.append(f"Ticker.history={type(exc).__name__}")
+
+    # 3) Official TWSE monthly history. This also naturally handles weekends/holidays by
+    #    ending on the latest available trading date rather than requiring today's date.
+    if len(closes) < 60:
+        twse_closes, twse_dates, twse_error = _fetch_taiex_from_twse(months=6)
+        if len(twse_closes) > len(closes):
+            closes, dates = twse_closes, twse_dates
+            source = "TWSE.MI_5MINS_HIST"
+        if twse_error:
+            source_notes.append(f"TWSE:{twse_error}")
+
+    if len(closes) < 60:
+        return {
+            "regime": "UNKNOWN",
+            "reason": f"TAIEX資料不足({len(closes)}日)",
+            "close": round(float(closes[-1]), 2) if closes else 0,
+            "market_data_date": dates[-1] if dates else None,
+            "source": source or "NONE",
+            "source_notes": source_notes,
+        }
+
+    close = float(closes[-1])
+    ma20 = sum(closes[-20:]) / 20
+    ma60 = sum(closes[-60:]) / 60
+    ret5 = (close / closes[-6] - 1) * 100 if len(closes) >= 6 and closes[-6] else 0.0
+    if close > ma20 > ma60 and ret5 > -1.0:
+        regime = "BULL"
+    elif close < ma20 < ma60 and ret5 < 1.0:
+        regime = "BEAR"
+    else:
+        regime = "NEUTRAL"
+
+    market_data_date = dates[-1] if dates else None
+    reason = (
+        f"TAIEX {close:.2f} / MA20 {ma20:.2f} / MA60 {ma60:.2f} / "
+        f"5D {ret5:+.2f}% / 資料日 {market_data_date or 'N/A'}"
+    )
+    return {
+        "regime": regime,
+        "reason": reason,
+        "close": round(close, 2),
+        "ma20": round(ma20, 2),
+        "ma60": round(ma60, 2),
+        "return_5d": round(ret5, 3),
+        "market_data_date": market_data_date,
+        "source": source or "UNKNOWN",
+        "history_days": len(closes),
+        "source_notes": source_notes,
+    }
 
 def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) -> Dict:
     """從高成交值候選池批次抓歷史行情，產生 Top5。"""
