@@ -267,6 +267,36 @@ def _batch_download(candidates: List[Dict]):
         timeout=YF_TIMEOUT,
     )
 
+
+
+def detect_market_regime() -> Dict:
+    """v21.0: use TAIEX trend/momentum to classify market regime. Shadow-only in v21.0."""
+    try:
+        frame = yf.download(
+            tickers="^TWII", period="6mo", interval="1d", auto_adjust=False,
+            progress=False, threads=False, timeout=YF_TIMEOUT,
+        )
+        closes = _extract_series(frame, "^TWII", "Close")
+        if len(closes) < 60:
+            return {"regime": "UNKNOWN", "reason": f"TAIEX資料不足({len(closes)}日)", "close": closes[-1] if closes else 0}
+        close = float(closes[-1])
+        ma20 = sum(closes[-20:]) / 20
+        ma60 = sum(closes[-60:]) / 60
+        ret5 = (close / closes[-6] - 1) * 100 if len(closes) >= 6 and closes[-6] else 0.0
+        if close > ma20 > ma60 and ret5 > -1.0:
+            regime = "BULL"
+        elif close < ma20 < ma60 and ret5 < 1.0:
+            regime = "BEAR"
+        else:
+            regime = "NEUTRAL"
+        reason = f"TAIEX {close:.2f} / MA20 {ma20:.2f} / MA60 {ma60:.2f} / 5D {ret5:+.2f}%"
+        return {
+            "regime": regime, "reason": reason, "close": round(close, 2),
+            "ma20": round(ma20, 2), "ma60": round(ma60, 2), "return_5d": round(ret5, 3),
+        }
+    except Exception as exc:
+        return {"regime": "UNKNOWN", "reason": f"Regime判斷失敗: {exc}"}
+
 def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) -> Dict:
     """從高成交值候選池批次抓歷史行情，產生 Top5。"""
     scan_date = today_taipei()
@@ -276,6 +306,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     rows: List[Dict] = []
     learning_rows = get_completed_ai_learning_history(limit=2000)
     learning_profile = build_learning_profile(learning_rows)
+    regime_info = detect_market_regime()
 
     batch = _batch_download(candidates)
     batch_is_empty = bool(batch is None or getattr(batch, "empty", True))
@@ -312,6 +343,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["market"] = quote.get("market", "")
         data["turnover"] = quote.get("turnover", 0)
         data["scan_date"] = scan_date
+        data["market_regime"] = regime_info.get("regime", "UNKNOWN")
+        data["market_regime_reason"] = regime_info.get("reason", "")
 
         # v20.5：以歷史 Day+5 表現做受控校正，最多加減 5 分。
         learning = learning_adjustment(data, learning_profile)
@@ -357,6 +390,11 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         "learning_min_samples": learning_profile.get("auto_apply_min_samples"),
         "learning_shadow_min_samples": learning_profile.get("shadow_min_samples"),
         "learning_mode": learning_profile.get("mode"),
+        "learning_guard": learning_profile.get("learning_guard"),
+        "duplicate_excluded_count": learning_profile.get("duplicate_excluded_count", 0),
+        "market_regime": regime_info.get("regime", "UNKNOWN"),
+        "market_regime_reason": regime_info.get("reason", ""),
+        "market_regime_meta": regime_info,
         "decision_engine_version": DECISION_ENGINE_VERSION,
         "batch_empty": batch_is_empty,
         "fallback_count": len(fallback_data),

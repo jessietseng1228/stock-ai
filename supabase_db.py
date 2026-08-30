@@ -160,7 +160,7 @@ def _encode_v20_plan(data: dict) -> str:
     if not plan:
         return str(data.get("trend") or "")
     payload = {
-        "v": "20.9",
+        "v": "21.0",
         "decision": plan.get("decision") or data.get("decision") or "",
         "confidence": int(plan.get("confidence", data.get("confidence", 0)) or 0),
         "pattern": plan.get("pattern") or data.get("pattern") or "",
@@ -176,7 +176,9 @@ def _encode_v20_plan(data: dict) -> str:
         "shadow_adjustment": float(data.get("shadow_adjustment", 0) or 0),
         "shadow_score": int(data.get("shadow_score", data.get("base_score", data.get("score", 0))) or 0),
         "learning_sample_count": int(data.get("learning_sample_count", 0) or 0),
-        "learning_version": data.get("learning_version") or "Learning Engine v20.9",
+        "learning_version": data.get("learning_version") or "Learning Engine v21.0",
+        "market_regime": data.get("market_regime") or "UNKNOWN",
+        "market_regime_reason": data.get("market_regime_reason") or "",
         "learned_score": int(data.get("learned_score", data.get("score", 0)) or 0),
         "final_score": int(data.get("final_score", data.get("score", 0)) or 0),
         "risk_points": int(data.get("risk_points", 0) or 0),
@@ -398,7 +400,9 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
             "decision": data.get("decision") or (data.get("trade_plan") or {}).get("decision") or "",
             "technical_score": int(factors.get("technical", 0) or 0),
             "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
-            "learning_version": data.get("learning_version") or "Learning Engine v20.9",
+            "learning_version": data.get("learning_version") or "Learning Engine v21.0",
+            "market_regime": data.get("market_regime") or "UNKNOWN",
+            "market_regime_reason": data.get("market_regime_reason") or "",
         })
 
     if not payload:
@@ -412,25 +416,41 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
         )
         return {"saved_count": len(res.data or payload)}
     except Exception as exc:
-        # 若尚未執行 v20.5 SQL，先用舊欄位保存，不影響 Top5。
-        legacy_keys = {
-            "scan_date", "symbol", "name", "market", "rank", "score_version",
-            "ai_score", "trend_score", "momentum_score", "volume_score",
-            "risk_score", "position_score", "entry_price"
-        }
-        legacy_payload = [{k: v for k, v in row.items() if k in legacy_keys} for row in payload]
+        # v21.0 migration 尚未執行時，先移除 Regime 欄位，保留 v20.5 learning 欄位。
+        v20_payload = [
+            {k: v for k, v in row.items() if k not in {"market_regime", "market_regime_reason"}}
+            for row in payload
+        ]
         try:
             res = (
                 supabase.table("ai_recommend_history")
-                .upsert(legacy_payload, on_conflict="scan_date,symbol")
+                .upsert(v20_payload, on_conflict="scan_date,symbol")
                 .execute()
             )
             return {
-                "saved_count": len(res.data or legacy_payload),
-                "warning": "v20.5 learning columns missing; run sql/260726_v20_5_learning_engine.sql",
+                "saved_count": len(res.data or v20_payload),
+                "warning": "v21.0 market regime columns missing; run sql/260830_v21_0_sample_guard_regime.sql",
             }
         except Exception:
-            return {"saved_count": 0, "error": str(exc)}
+            # 若連 v20.5 learning SQL 都尚未執行，退回 v18.1 基本欄位。
+            legacy_keys = {
+                "scan_date", "symbol", "name", "market", "rank", "score_version",
+                "ai_score", "trend_score", "momentum_score", "volume_score",
+                "risk_score", "position_score", "entry_price"
+            }
+            legacy_payload = [{k: v for k, v in row.items() if k in legacy_keys} for row in payload]
+            try:
+                res = (
+                    supabase.table("ai_recommend_history")
+                    .upsert(legacy_payload, on_conflict="scan_date,symbol")
+                    .execute()
+                )
+                return {
+                    "saved_count": len(res.data or legacy_payload),
+                    "warning": "learning columns missing; run v20.5 and v21.0 SQL migrations",
+                }
+            except Exception:
+                return {"saved_count": 0, "error": str(exc)}
 
 
 

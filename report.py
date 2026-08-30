@@ -280,7 +280,7 @@ def build_single_flex(symbol: str) -> Tuple[str, Dict, str]:
         _text(f"📈 {data['title']}", "xl", "bold"),
         _text(f"{data['price']:.2f}｜{arrow}{data['change']:.2f} ({data['change_pct']:.2f}%)", "md", "bold"),
         _text(f"AI 3.0：{data['score']}分 {data['stars']}｜{plan['decision']}", "sm", "bold"),
-        _text("Decision + Learning Engine v20.9｜Clean Sample・Shadow Learning・操作決策", "xs", color="#666666"),
+        _text("Decision + Learning Engine v21.0｜Dedup・Guard・Regime Shadow", "xs", color="#666666"),
         _text(f"型態：{plan['pattern']}｜Confidence：{plan['confidence']}%", "xs", color="#555555"),
         _text(data.get("factor_summary") or factor_summary(data), "xs", color="#555555"),
         _text(data.get("technical_summary") or technical_summary(data), "xs", color="#555555"),
@@ -308,7 +308,7 @@ def build_performance_report(limit: int = 2000) -> str:
     cur, hist, clean = a["current_strategy"], a["all_history"], a["clean_learning"]
     d1, d5 = cur["day1"], cur["day5"]
     lines = [
-        "📊 AI Top5 績效驗證｜v20.9", "────────────",
+        "📊 AI Top5 績效驗證｜v21.0", "────────────",
         "【現行策略樣本】",
         f"正式樣本：{cur['total_count']} 筆",
         f"Day+1：{d1['count']} 筆｜勝率 {d1['win_rate']:.1f}%｜均報酬 {d1['avg_return']:+.2f}%",
@@ -333,6 +333,6 @@ def build_performance_report(limit: int = 2000) -> str:
             title=f"{r.get('symbol')} {r.get('name') or ''}".strip()
             lines.append(f"• {r.get('scan_date')} {title}｜Base {r.get('base_score')}｜Day+5 {r.get('day5_return'):+.2f}%")
     lines.extend(["", "⚠️ Legacy 資料不納入 Learning Engine 權重調整。",
-                  "v20.9 採 Shadow Learning；Clean Sample 未達 30 筆前不自動修改正式 AI 分數。", "────────────",
+                  "v21.0 採 Dedup + Learning Guard；即使 Clean Sample ≥30，未通過資料分散與有效訊號門檻仍維持 Shadow。", "────────────",
                   "提醒：績效統計為歷史驗證，不保證未來獲利，也不是投資建議。"] )
     return "\n".join(lines)

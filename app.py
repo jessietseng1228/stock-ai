@@ -34,7 +34,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v20.9-stable"
+VERSION = "v21.0-stable"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -237,6 +237,12 @@ def _scan_response(result: dict, job: str, mode: str, locked: bool = False):
         "learning_ready": result.get("learning_ready"),
         "learning_sample_count": result.get("learning_sample_count"),
         "learning_min_samples": result.get("learning_min_samples"),
+        "learning_mode": result.get("learning_mode"),
+        "learning_guard": result.get("learning_guard"),
+        "duplicate_excluded_count": result.get("duplicate_excluded_count"),
+        "market_regime": result.get("market_regime"),
+        "market_regime_reason": result.get("market_regime_reason"),
+        "market_regime_meta": result.get("market_regime_meta"),
         "decision_engine_version": result.get("decision_engine_version"),
         "message": result.get("message"),
     })

@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable, Dict, Iterable, List
 
-ANALYTICS_VERSION = "Performance Analytics v20.9"
+from learning_engine import build_learning_profile
+
+ANALYTICS_VERSION = "Performance Analytics v21.0"
 CURRENT_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
 FACTOR_FIELDS = ("trend_score", "momentum_score", "volume_score", "risk_score", "position_score", "technical_score")
 
@@ -46,7 +48,7 @@ def _is_current_strategy(row: dict) -> bool:
 
 
 def _is_clean_learning(row: dict) -> bool:
-    """v20.9 可使用的乾淨樣本：現行策略 + Day5 完成 + 六因子欄位完整。"""
+    """v21.0 候選乾淨樣本；正式 Learning Profile 另做 Dedup / Outlier Guard。"""
     if not _is_current_strategy(row) or row.get("day5_return") is None:
         return False
     return all(row.get(field) is not None for field in FACTOR_FIELDS)
@@ -87,6 +89,15 @@ def build_performance_analytics(rows: List[dict]) -> Dict:
     rows = rows or []
     current = [r for r in rows if _is_current_strategy(r)]
     clean = [r for r in rows if _is_clean_learning(r)]
+    learning_profile = build_learning_profile(rows)
+    # performance 頁面的 clean 統計也採 logical sample 去重，避免數字與 /learning_status 不一致。
+    seen = set(); clean_dedup = []
+    for r in clean:
+        key = f"{r.get('scan_date') or ''}|{str(r.get('symbol') or '').upper()}"
+        if key in seen:
+            continue
+        seen.add(key); clean_dedup.append(r)
+    clean = clean_dedup
     legacy = [r for r in rows if not _is_current_strategy(r)]
     all_stats = _analytics_for(rows); current_stats = _analytics_for(current)
     return {
@@ -97,7 +108,7 @@ def build_performance_analytics(rows: List[dict]) -> Dict:
         "score_buckets": all_stats["score_buckets"], "rank_buckets": all_stats["rank_buckets"], "decision_buckets": all_stats["decision_buckets"],
         "all_history": all_stats,
         "current_strategy": {**current_stats, "worst_cases": _worst(current)},
-        "clean_learning": {**_analytics_for(clean), "factor_effectiveness": _factor_correlation_proxy(clean), "ready_for_auto_weight": len(clean) >= 30},
+        "clean_learning": {**_analytics_for(clean), "factor_effectiveness": _factor_correlation_proxy(clean), "ready_for_auto_weight": bool(learning_profile.get("auto_apply_ready")), "learning_guard": learning_profile.get("learning_guard"), "duplicate_excluded_count": learning_profile.get("duplicate_excluded_count", 0)},
         "legacy": {"total_count":len(legacy), "reason":"非現行 Entry Filter 決策或 Base Score 無效；僅供歷史參考，不可用於自動調權重。"},
         "factor_effectiveness": _factor_correlation_proxy(clean),
         "worst_cases": _worst(current),
