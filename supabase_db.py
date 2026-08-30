@@ -176,7 +176,7 @@ def _encode_v20_plan(data: dict) -> str:
         "shadow_adjustment": float(data.get("shadow_adjustment", 0) or 0),
         "shadow_score": int(data.get("shadow_score", data.get("base_score", data.get("score", 0))) or 0),
         "learning_sample_count": int(data.get("learning_sample_count", 0) or 0),
-        "learning_version": data.get("learning_version") or "Learning Engine v21.0",
+        "learning_version": data.get("learning_version") or "Learning Engine v21.0.2",
         "market_regime": data.get("market_regime") or "UNKNOWN",
         "market_regime_reason": data.get("market_regime_reason") or "",
         "learned_score": int(data.get("learned_score", data.get("score", 0)) or 0),
@@ -400,7 +400,7 @@ def save_ai_recommend_history(scan_date: str, rows: list, limit: int = 5) -> dic
             "decision": data.get("decision") or (data.get("trade_plan") or {}).get("decision") or "",
             "technical_score": int(factors.get("technical", 0) or 0),
             "learning_adjustment": float(data.get("learning_adjustment", 0) or 0),
-            "learning_version": data.get("learning_version") or "Learning Engine v21.0",
+            "learning_version": data.get("learning_version") or "Learning Engine v21.0.2",
             "market_regime": data.get("market_regime") or "UNKNOWN",
             "market_regime_reason": data.get("market_regime_reason") or "",
         })

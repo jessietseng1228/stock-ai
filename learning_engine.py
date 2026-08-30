@@ -4,7 +4,7 @@ import os
 from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, Tuple
 
-LEARNING_VERSION = "Learning Engine v21.0"
+LEARNING_VERSION = "Learning Engine v21.0.2"
 CURRENT_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
 FACTOR_FIELDS = ("trend_score", "momentum_score", "volume_score", "risk_score", "position_score", "technical_score")
 SHADOW_MIN_SAMPLES = max(5, int(os.getenv("LEARNING_SHADOW_MIN_SAMPLES", "10")))
@@ -51,6 +51,71 @@ def _deduplicate(rows: List[dict]) -> Tuple[List[dict], int]:
         clean.append(row)
     return clean, duplicates
 
+
+
+
+def _legacy_exclusion_reasons(row: dict) -> List[str]:
+    """Return every reason a completed/deduped sample is not eligible for v21 learning."""
+    reasons: List[str] = []
+    decision = str(row.get("decision") or "").strip()
+    if decision not in CURRENT_ALLOWED_DECISIONS:
+        reasons.append("decision_not_allowed")
+    if _number(row.get("base_score")) <= 0:
+        reasons.append("missing_or_invalid_base_score")
+    if row.get("day5_return") is None:
+        reasons.append("missing_day5_return")
+    elif abs(_number(row.get("day5_return"))) > MAX_ABS_DAY5_RETURN:
+        reasons.append("day5_return_outlier")
+    missing_factors = [field for field in FACTOR_FIELDS if row.get(field) is None]
+    if missing_factors:
+        reasons.append("missing_factor_scores")
+        reasons.extend(f"missing_{field}" for field in missing_factors)
+    if not str(row.get("scan_date") or "").strip():
+        reasons.append("missing_scan_date")
+    if not str(row.get("symbol") or "").strip():
+        reasons.append("missing_symbol")
+    return reasons
+
+
+def _legacy_diagnostics(deduped: List[dict]) -> Dict:
+    """v21.0.2 diagnostics. Primary reasons sum exactly to legacy_excluded_count."""
+    excluded = []
+    primary_counts = Counter()
+    all_counts = Counter()
+    preview = []
+    priority = (
+        "decision_not_allowed",
+        "missing_or_invalid_base_score",
+        "missing_day5_return",
+        "day5_return_outlier",
+        "missing_factor_scores",
+        "missing_scan_date",
+        "missing_symbol",
+    )
+    for row in deduped:
+        reasons = _legacy_exclusion_reasons(row)
+        if not reasons:
+            continue
+        excluded.append(row)
+        all_counts.update(reasons)
+        primary = next((r for r in priority if r in reasons), reasons[0])
+        primary_counts[primary] += 1
+        if len(preview) < 12:
+            preview.append({
+                "scan_date": row.get("scan_date"),
+                "symbol": row.get("symbol"),
+                "decision": row.get("decision"),
+                "base_score": row.get("base_score"),
+                "day5_return": row.get("day5_return"),
+                "reasons": reasons,
+            })
+    return {
+        "excluded_count": len(excluded),
+        "primary_reasons": dict(primary_counts),
+        "reason_counts": dict(all_counts),
+        "preview": preview,
+        "notes": "primary_reasons 加總等於 legacy_excluded_count；reason_counts 允許同一筆樣本同時命中多個原因。",
+    }
 
 def _is_clean_learning(row: dict) -> bool:
     decision = str(row.get("decision") or "").strip()
@@ -203,6 +268,7 @@ def build_learning_profile(rows: List[dict]) -> Dict:
     clean_count = overall["count"]
     factor_shadow = _factor_shadow(clean)
     guard = _learning_guard(clean, factor_shadow)
+    legacy_diag = _legacy_diagnostics(deduped)
     shadow_ready = clean_count >= SHADOW_MIN_SAMPLES
     auto_apply_ready = bool(guard.get("passed"))
     mode = "auto" if auto_apply_ready else ("shadow" if shadow_ready else "collecting")
@@ -218,6 +284,10 @@ def build_learning_profile(rows: List[dict]) -> Dict:
         "duplicate_excluded_count": duplicate_excluded,
         "clean_sample_count": clean_count,
         "legacy_excluded_count": len(deduped) - clean_count,
+        "legacy_excluded_primary_reasons": legacy_diag["primary_reasons"],
+        "legacy_excluded_reason_counts": legacy_diag["reason_counts"],
+        "legacy_excluded_preview": legacy_diag["preview"],
+        "legacy_diagnostics_notes": legacy_diag["notes"],
         "shadow_min_samples": SHADOW_MIN_SAMPLES,
         "auto_apply_min_samples": AUTO_APPLY_MIN_SAMPLES,
         "max_adjustment": MAX_ADJUSTMENT,
