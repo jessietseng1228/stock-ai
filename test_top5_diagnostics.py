@@ -44,7 +44,7 @@ class Top5DiagnosticsTests(unittest.TestCase):
         response = self.client.get("/scan_top5?limit=30")
         self.assertEqual(response.status_code, 200)
         result = response.get_json()
-        self.assertEqual(result["version"], "v21.2")
+        self.assertEqual(result["version"], test_top5_freshness.Top5FreshnessTests.app_module.VERSION)
         self.assertEqual(result["scan_date"], self.date)
         self.assertFalse(result["locked"])
         self.assertEqual(result["saved_count"], 0)

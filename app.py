@@ -32,10 +32,11 @@ from performance_tracker import update_recommendation_performance
 from learning_engine import build_learning_profile, LEARNING_VERSION
 from performance_analytics import build_performance_analytics, ANALYTICS_VERSION
 from morning_job import run_morning_report
+from overnight_risk import get_overnight_risk
 
 app = Flask(__name__)
 
-VERSION = "v21.2"
+VERSION = "v21.3"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -77,6 +78,11 @@ def home():
 @app.route("/status", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "version": VERSION})
+
+
+@app.route("/overnight_risk_status", methods=["GET"])
+def overnight_risk_status():
+    return jsonify({"version": VERSION, **get_overnight_risk()})
 
 
 @app.route("/callback", methods=["POST"])

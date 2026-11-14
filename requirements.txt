@@ -4,3 +4,4 @@ yfinance==0.2.48
 supabase==2.10.0
 gunicorn==23.0.0
 certifi>=2026.10.19
+beautifulsoup4>=4.11.1
