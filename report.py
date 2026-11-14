@@ -1,8 +1,8 @@
 from typing import Dict, List, Tuple
 from stock import analyze_stock, get_stock_data, top5_candidates
-from market_scan import get_saved_or_scan_top5, today_taipei, market_top5_status
+from market_scan import today_taipei
 from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
-from supabase_db import get_latest_ai_recommend_history, get_ai_performance_history
+from supabase_db import get_latest_ai_recommend_history, get_ai_performance_history, get_market_top5, get_market_top5_meta
 from performance_analytics import build_performance_analytics
 
 DISCLAIMER = "提醒：v20.8 採每日正式 Top5 快照；績效統計為歷史驗證，不保證未來獲利，也不是投資建議。"
@@ -73,24 +73,28 @@ def build_morning_report(symbols: List[str]) -> str:
 
 
 def build_top5_report(symbols: List[str] = None) -> str:
-    top5 = get_saved_or_scan_top5(auto_scan=False)
-    if not top5:
-        status = market_top5_status()
-        scan_date = status.get("scan_date") or today_taipei()
-        if status.get("has_result"):
-            return (
-                f"📭 今日無符合進場條件標的｜掃描日期 {scan_date}\n"
-                "────────────\n"
-                "今日市場掃描已完成，但沒有股票同時通過進場條件與風險門檻。\n\n"
-                "今日建議：保留現金，等待更明確的進場機會。\n\n"
-                "提醒：系統不會為了湊滿五檔而加入等待回檔、避免追高或持續觀察的股票。"
-            )
-        return "⏳ 今日尚未完成市場掃描。請等待正式 /scan_top5_cron 排程完成；/scan_top5 僅供預覽，不會寫入正式結果。"
+    scan_date, top5, message = _today_top5()
+    return _format_top5_report(scan_date, top5) if top5 else message
 
-    result_date = top5[0].get("scan_date") or today_taipei()
-    is_today = str(result_date) == str(today_taipei())
-    title = "🔥 今日 TOP5可買" if is_today else "📚 最近一次 Top5"
-    lines = [f"{title}｜掃描日期 {result_date}", "────────────"]
+
+def _today_top5() -> Tuple[str, List[Dict], str]:
+    scan_date = today_taipei()
+    top5 = get_market_top5(scan_date, limit=5)
+    if top5:
+        return scan_date, top5, ""
+
+    status = get_market_top5_meta(scan_date)
+    if status.get("error") or status.get("count"):
+        message = "⚠️ 暫時無法讀取今日 Top5，請稍後再試。"
+    elif status.get("has_result"):
+        message = f"📭 今日無符合進場條件標的｜掃描日期 {scan_date}"
+    else:
+        message = "⏳ 今日 Top5 尚未完成掃描。"
+    return scan_date, top5, message
+
+
+def _format_top5_report(scan_date: str, top5: List[Dict]) -> str:
+    lines = [f"🔥 今日 TOP5可買｜掃描日期 {scan_date}", "────────────"]
     for idx, data in enumerate(top5, 1):
         arrow = _arrow(data)
         reasons = "、".join(data.get("reasons", []))
@@ -246,19 +250,14 @@ def build_morning_flex(symbols: List[str]) -> Tuple[str, Dict, str]:
 
 
 def build_top5_flex(symbols: List[str] = None) -> Tuple[str, Dict, str]:
-    fallback = build_top5_report()
-    top5 = get_saved_or_scan_top5(auto_scan=False)
+    scan_date, top5, message = _today_top5()
     if not top5:
-        status = market_top5_status()
-        title = "今日無符合標的" if status.get("has_result") else "今日尚未掃描"
-        return title, {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [_text(fallback)]}}, fallback
+        return message, {"type": "bubble", "body": {"type": "box", "layout": "vertical", "contents": [_text(message)]}}, message
 
-    result_date = top5[0].get('scan_date') or today_taipei()
-    is_today = str(result_date) == str(today_taipei())
-    heading = "🔥 今日 TOP5可買" if is_today else "📚 最近一次 Top5"
+    fallback = _format_top5_report(scan_date, top5)
     contents = [
-        _text(heading, "xl", "bold"),
-        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.7.2｜掃描日期 {result_date}", "xs", color="#666666"),
+        _text("🔥 今日 TOP5可買", "xl", "bold"),
+        _text(f"全市場成交值篩選＋AI Score 3.0＋Decision Engine v20.7.2｜掃描日期 {scan_date}", "xs", color="#666666"),
     ]
     for idx, data in enumerate(top5, 1):
         contents.append(_stock_box(data, idx))

@@ -13,6 +13,7 @@ from supabase_db import (
     parse_symbols,
     get_completed_ai_learning_history,
     get_ai_performance_history,
+    get_market_top5,
 )
 from report import (
     build_morning_report,
@@ -26,7 +27,7 @@ from report import (
     build_ai_history_flex,
     build_performance_report,
 )
-from market_scan import scan_market_top5, market_top5_status, get_saved_or_scan_top5
+from market_scan import scan_market_top5, market_top5_status
 from performance_tracker import update_recommendation_performance
 from learning_engine import build_learning_profile, LEARNING_VERSION
 from performance_analytics import build_performance_analytics, ANALYTICS_VERSION
@@ -34,7 +35,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v21.1-dual-learning"
+VERSION = "v21.1.1-top5-freshness-hotfix"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -44,7 +45,7 @@ CMD_MORNING = {"今日早報", "morning_report", "action=morning_report"}
 CMD_LIST = {"自選清單", "watchlist", "action=watchlist"}
 CMD_ADD = {"加股票", "新增股票", "➕ 加股票", "action=add_stock"}
 CMD_DELETE = {"刪股票", "刪除股票", "➖ 刪股票", "action=delete_stock"}
-CMD_TOP5 = {"TOP5可買", "🔥 TOP5可買", "top5", "action=top5"}
+CMD_TOP5 = {"TOP5可買", "🔥 TOP5可買", "top5", "action=top5", "今日 Top5"}
 CMD_ANALYZE = {"個股分析", "📈 個股分析", "analyze", "action=analyze"}
 CMD_AI_HISTORY = {"AI歷史", "AI推薦歷史", "ai_history", "action=ai_history"}
 CMD_PERFORMANCE = {"AI績效", "績效驗證", "performance", "action=performance"}
@@ -267,7 +268,7 @@ def scan_top5_cron():
     status = market_top5_status()
 
     if status.get("has_result") and not force:
-        rows = get_saved_or_scan_top5(auto_scan=False)
+        rows = get_market_top5(status["scan_date"], limit=5)
         result = {
             "scan_date": status.get("scan_date"),
             "candidate_count": None,
