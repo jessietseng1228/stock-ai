@@ -4,6 +4,7 @@ from market_scan import today_taipei
 from ai import ai_comment, factor_summary, technical_summary, trade_plan, SCORE_VERSION
 from supabase_db import get_latest_ai_recommend_history, get_ai_performance_history, get_market_top5, get_market_top5_meta
 from performance_analytics import build_performance_analytics
+from overnight_risk import format_overnight_summary, get_overnight_risk
 
 DISCLAIMER = "提醒：v20.8 採每日正式 Top5 快照；績效統計為歷史驗證，不保證未來獲利，也不是投資建議。"
 
@@ -229,8 +230,17 @@ def _stock_box(data: Dict, rank: int = 0) -> Dict:
     }
 
 
-def build_morning_flex(symbols: List[str]) -> Tuple[str, Dict, str]:
-    fallback = build_morning_report(symbols)
+def morning_risk_summary() -> str:
+    try:
+        return format_overnight_summary(get_overnight_risk())
+    except Exception:
+        return "隔夜市場風險｜資料不足\n開盤風險觀測｜非買賣訊號"
+
+
+def build_morning_flex(symbols: List[str], risk_summary: str = None) -> Tuple[str, Dict, str]:
+    summary = morning_risk_summary() if risk_summary is None else risk_summary
+    title, _, body = build_morning_report(symbols).partition("\n")
+    fallback = f"{title}\n{summary}\n\n{body}"
     rows = []
     for s in symbols[:10]:
         data = get_stock_data(s)
@@ -242,6 +252,7 @@ def build_morning_flex(symbols: List[str]) -> Tuple[str, Dict, str]:
 
     contents = [
         _text("☀️ 股票 AI 今日早報", "xl", "bold"),
+        _text(summary, "xs", color="#555555"),
         _text("自選股量價快速掃描", "xs", color="#666666"),
     ] + rows + [_text(DISCLAIMER, "xs", color="#888888")]
 

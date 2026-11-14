@@ -19,7 +19,8 @@ def main() -> int:
 
     try:
         result = run_morning_report()
-        print("[CRON][RESULT] " + json.dumps(result, ensure_ascii=False), flush=True)
+        log_result = {key: value for key, value in result.items() if key != "failed_user_ids"}
+        print("[CRON][RESULT] " + json.dumps(log_result, ensure_ascii=False), flush=True)
 
         if result.get("failed", 0) > 0:
             print("[CRON][FAILED] one or more LINE pushes failed", flush=True)
@@ -28,7 +29,7 @@ def main() -> int:
         print("[CRON][SUCCESS] morning_report completed", flush=True)
         return 0
     except Exception as exc:
-        print(f"[CRON][FATAL] {type(exc).__name__}: {exc}", flush=True)
+        print(f"[CRON][FATAL] {type(exc).__name__}", flush=True)
         return 1
 
 

@@ -6,7 +6,7 @@ Web 路由 /cron 與 Render Cron Job 都呼叫這裡，避免排程依賴
 from typing import Dict, List
 
 from line import push_flex
-from report import build_morning_flex
+from report import build_morning_flex, morning_risk_summary
 from supabase_db import get_all_user_ids, get_user_stocks
 
 
@@ -20,6 +20,7 @@ def run_morning_report() -> Dict:
     sent = 0
     skipped = 0
     failed_user_ids: List[str] = []
+    risk_summary = None
 
     for user_id in user_ids:
         try:
@@ -28,14 +29,16 @@ def run_morning_report() -> Dict:
                 skipped += 1
                 continue
 
-            alt, flex, fallback = build_morning_flex(stocks)
+            if risk_summary is None:
+                risk_summary = morning_risk_summary()
+            alt, flex, fallback = build_morning_flex(stocks, risk_summary)
             ok = push_flex(user_id, alt, flex, fallback)
             if ok:
                 sent += 1
             else:
                 failed_user_ids.append(user_id)
         except Exception as exc:
-            print(f"[MORNING_REPORT][USER_FAILED] user_id={user_id} error={type(exc).__name__}: {exc}")
+            print(f"[MORNING_REPORT][USER_FAILED] error={type(exc).__name__}")
             failed_user_ids.append(user_id)
 
     return {
