@@ -65,6 +65,28 @@ class OvernightRiskTests(unittest.TestCase):
         self.assertEqual(self.collect(tx=tx_response(), us=us_response(
             "2026-11-12,100,100\n2026-11-13,101,101"))["risk_level"], "低")
 
+    def test_taifex_direction_markers_in_risk_and_line_summary(self):
+        stocks_up = us_response("2026-11-12,100,100\n2026-11-13,101,101")
+        for raw, change, level in (
+            ("▼0.50%", -0.5, "中"),
+            ("▼1.50%", -1.5, "高"),
+            ("▲1.50%", 1.5, "低"),
+            ("▼-1.50%", -1.5, "高"),
+            ("▲+1.50%", 1.5, "低"),
+        ):
+            with self.subTest(raw=raw):
+                result = self.collect(tx=tx_response(raw), us=stocks_up)
+                self.assertEqual(result["sources"]["tx"]["change_pct"], change)
+                self.assertEqual(result["risk_level"], level)
+                self.assertIn(f"台指期夜盤 TX202611 {change:+.2f}%", risk.format_overnight_summary(result))
+
+    def test_plain_numbers_and_missing_tx_change(self):
+        self.assertEqual(risk._number("43,706"), 43706)
+        self.assertEqual(risk._number("56,132"), 56132)
+        self.assertEqual(risk._tx_change_pct("-1.50%"), -1.5)
+        self.assertEqual(risk._tx_change_pct("+1.50%"), 1.5)
+        self.assertIsNone(risk._tx_change_pct("▼-"))
+
     def test_source_failures_and_missing_data(self):
         error = requests.Timeout("private debug details")
         partial = self.collect(tx=error, us=us_response("2026-11-12,100,100\n2026-11-13,101,"))

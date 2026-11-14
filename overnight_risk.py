@@ -67,10 +67,18 @@ def _source(key, status="unavailable", **fields):
 
 def _number(text):
     try:
-        value = float(text.strip().translate(str.maketrans("", "", ",%▲▼")))
+        value = float(text.strip().translate(str.maketrans("", "", ",%")))
         return value if isfinite(value) else None
     except (AttributeError, ValueError):
         return None
+
+
+def _tx_change_pct(text):
+    direction = {"▲": 1, "▼": -1}.get(text[:1])
+    if direction is None:
+        return _number(text)
+    value = _number(text[1:])
+    return direction * abs(value) if value is not None else None
 
 
 def _fetch_tx(day, previous, now):
@@ -106,7 +114,8 @@ def _fetch_tx(day, previous, now):
         return _source("tx", detail="contract_missing", **timestamp)
     contract = min(contracts)
     cells = contracts[contract]
-    value, change, volume = map(_number, (cells[5], cells[7], cells[8]))
+    value, volume = map(_number, (cells[5], cells[8]))
+    change = _tx_change_pct(cells[7])
     if not value or value < 0 or change is None or not volume or volume < 0 or cells[9] != "-":
         return _source("tx", detail="night_close_missing", contract=contract, **timestamp)
     return _source("tx", "ok", contract=contract, value=value, change_pct=change, **timestamp)
