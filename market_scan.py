@@ -12,7 +12,7 @@ import yfinance as yf
 
 from stock import _build_data_from_values, display_symbol
 from supabase_db import (
-    save_market_top5, get_market_top5, get_latest_market_top5, get_market_top5_meta,
+    save_market_top5, get_market_top5, get_market_top5_meta,
     save_ai_recommend_history, get_completed_ai_learning_history
 )
 from ai import SCORE_VERSION, score_to_stars, trend_label, trade_plan, decision_narrative
@@ -590,17 +590,11 @@ def get_saved_or_scan_top5(auto_scan: bool = False) -> List[Dict]:
     if rows:
         return rows
 
-    # v20.7.1：今日已掃描但零入選時，不回退顯示昨日資料。
-    today_meta = get_market_top5_meta(scan_date)
-    if today_meta.get("has_result"):
-        return []
-
-    # 今日尚未掃描（例如午夜後、週末或休市日），才顯示最近一次成功結果。
-    latest_rows = get_latest_market_top5(limit=5)
-    if latest_rows:
-        return latest_rows
-
+    # v21.1.1：今日查詢只使用當日快照；完成標記也會鎖住自動掃描。
     if auto_scan:
+        today_meta = get_market_top5_meta(scan_date)
+        if today_meta.get("has_result") or today_meta.get("error"):
+            return []
         result = scan_market_top5(save=True)
         return result.get("top5", [])
     return []

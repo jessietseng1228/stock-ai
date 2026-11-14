@@ -273,6 +273,7 @@ def get_market_top5(scan_date: str, limit: int = 5) -> list:
             supabase.table("market_top5_results")
             .select("*")
             .eq("scan_date", scan_date)
+            .neq("symbol", EMPTY_TOP5_SYMBOL)
             .order("rank")
             .limit(limit)
             .execute()
@@ -359,11 +360,15 @@ def get_market_top5_meta(scan_date: str) -> dict:
     try:
         res = (
             supabase.table("market_top5_results")
-            .select("id,scan_date")
+            .select("symbol")
             .eq("scan_date", scan_date)
             .execute()
         )
-        return {"has_result": bool(res.data), "count": len(res.data or [])}
+        rows = res.data or []
+        return {
+            "has_result": bool(rows),
+            "count": sum(row.get("symbol") != EMPTY_TOP5_SYMBOL for row in rows),
+        }
     except Exception as e:
         return {"has_result": False, "count": 0, "error": str(e)}
 
