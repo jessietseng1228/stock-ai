@@ -29,6 +29,7 @@ DEFAULT_STORE_COUNT = max(5, int(os.getenv("TOP5_STORE_COUNT", "20")))
 MIN_TURNOVER = max(0, int(os.getenv("TOP5_MIN_TURNOVER", "100000000")))
 YF_PERIOD = os.getenv("TOP5_YF_PERIOD", "3mo")
 YF_TIMEOUT = max(10, int(os.getenv("TOP5_YF_TIMEOUT", "25")))
+CHART_WORKERS = 8
 
 
 TOP5_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
@@ -87,7 +88,9 @@ def _is_common_stock(code: str, name: str = "") -> bool:
     return not any(word in name.upper() for word in bad_words)
 
 
-def fetch_twse_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
+def fetch_twse_quotes(raw_counts: Optional[Counter] = None, source_status: Optional[Dict] = None) -> List[Dict]:
+    if source_status is not None:
+        source_status["twse"] = "error"
     url = "https://www.twse.com.tw/exchangeReport/MI_INDEX"
     params = {"response": "json", "type": "ALLBUT0999"}
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -98,12 +101,27 @@ def fetch_twse_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
     except Exception:
         return []
 
+    if not isinstance(payload, dict):
+        return []
+    if str(payload.get("stat", "")).strip() == "很抱歉，沒有符合條件的資料!":
+        if source_status is not None:
+            source_status["twse"] = "empty"
+        return []
+    tables = payload.get("tables")
+    if not isinstance(tables, list):
+        return []
+    if source_status is not None:
+        source_status["twse"] = "empty" if not tables else "error"
     rows: List[Dict] = []
-    for table in payload.get("tables") or []:
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
         fields = table.get("fields") or []
         data_rows = table.get("data") or []
         if "證券代號" not in fields or "證券名稱" not in fields:
             continue
+        if source_status is not None and source_status["twse"] != "ok":
+            source_status["twse"] = "ok" if data_rows else "empty"
         if raw_counts is not None:
             raw_counts["twse"] += len(data_rows)
         idx_code = fields.index("證券代號")
@@ -112,7 +130,7 @@ def fetch_twse_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
         idx_volume = fields.index("成交股數") if "成交股數" in fields else None
         idx_close = fields.index("收盤價") if "收盤價" in fields else None
         for row in data_rows:
-            if len(row) <= max(idx_code, idx_name):
+            if not isinstance(row, list) or len(row) <= max(idx_code, idx_name):
                 continue
             code = str(row[idx_code]).strip()
             name = str(row[idx_name]).strip()
@@ -129,7 +147,9 @@ def fetch_twse_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
     return rows
 
 
-def fetch_tpex_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
+def fetch_tpex_quotes(raw_counts: Optional[Counter] = None, source_status: Optional[Dict] = None) -> List[Dict]:
+    if source_status is not None:
+        source_status["tpex"] = "error"
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -139,10 +159,16 @@ def fetch_tpex_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
     except Exception:
         return []
 
-    if raw_counts is not None and isinstance(payload, list):
+    if not isinstance(payload, list):
+        return []
+    if source_status is not None:
+        source_status["tpex"] = "ok" if payload else "empty"
+    if raw_counts is not None:
         raw_counts["tpex"] += len(payload)
     rows: List[Dict] = []
-    for item in payload if isinstance(payload, list) else []:
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
         code = str(item.get("SecuritiesCompanyCode") or item.get("代號") or "").strip()
         name = str(item.get("CompanyName") or item.get("名稱") or "").strip()
         if not _is_common_stock(code, name):
@@ -160,7 +186,8 @@ def fetch_tpex_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
 
 def get_market_universe(diagnostics: Optional[Dict] = None) -> List[Dict]:
     raw_counts = Counter(twse=0, tpex=0) if diagnostics is not None else None
-    rows = fetch_twse_quotes(raw_counts) + fetch_tpex_quotes(raw_counts)
+    source_status = {} if diagnostics is not None else None
+    rows = fetch_twse_quotes(raw_counts, source_status) + fetch_tpex_quotes(raw_counts, source_status)
     counts = Counter(invalid_or_duplicate=0, turnover_excluded=0)
     seen = set()
     clean: List[Dict] = []
@@ -183,6 +210,7 @@ def get_market_universe(diagnostics: Optional[Dict] = None) -> List[Dict]:
             **counts,
             "count": len(clean),
             "min_turnover": MIN_TURNOVER,
+            "source_fetch_status": source_status,
         }
     return sorted(clean, key=lambda item: item.get("turnover", 0), reverse=True)
 
@@ -267,7 +295,7 @@ def _fallback_chart_batch(candidates: List[Dict]) -> Dict[str, Dict]:
     results: Dict[str, Dict] = {}
     if not candidates:
         return results
-    workers = min(8, max(1, len(candidates)))
+    workers = min(CHART_WORKERS, len(candidates))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_fetch_yahoo_chart, _yf_ticker(row)): _yf_ticker(row) for row in candidates}
         for future in as_completed(futures):
@@ -508,20 +536,34 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
 
     batch = _batch_download(candidates)
     batch_is_empty = bool(batch is None or getattr(batch, "empty", True))
-    fallback_data = _fallback_chart_batch(candidates) if batch_is_empty else {}
-    quotes = Counter(batch_success=0, batch_failure=0, fallback_success=0, fallback_failure=0)
+    batch_closes = {
+        ticker: _extract_series(batch, ticker, "Close")
+        for ticker in map(_yf_ticker, candidates)
+    }
+    fallback_candidates = candidates if batch_is_empty else []
+    if not batch_is_empty and not save:
+        # 部分批次失敗只在預覽補抓，最多一輪並行請求。
+        fallback_candidates = [row for row in candidates if not batch_closes[_yf_ticker(row)]][:CHART_WORKERS]
+    fallback_tickers = {_yf_ticker(row) for row in fallback_candidates}
+    fallback_data = _fallback_chart_batch(fallback_candidates) if fallback_candidates or batch_is_empty else {}
+    quotes = Counter(
+        batch_success=0, batch_failure=0, fallback_success=0,
+        fallback_failure=0, fallback_not_attempted=0,
+    )
     missing_fields = Counter()
 
     for quote in candidates:
         code = quote["symbol"]
         ticker = _yf_ticker(quote)
-        closes = _extract_series(batch, ticker, "Close")
+        closes = batch_closes[ticker]
         volumes = _extract_series(batch, ticker, "Volume")
         highs = _extract_series(batch, ticker, "High")
         lows = _extract_series(batch, ticker, "Low")
         quotes["batch_success" if closes else "batch_failure"] += 1
-        if batch_is_empty:
+        if ticker in fallback_tickers:
             quotes["fallback_success" if ticker in fallback_data else "fallback_failure"] += 1
+        elif not closes:
+            quotes["fallback_not_attempted"] += 1
         if not closes and ticker in fallback_data:
             closes = fallback_data[ticker].get("closes", [])
             volumes = fallback_data[ticker].get("volumes", [])

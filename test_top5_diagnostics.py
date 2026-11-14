@@ -1,4 +1,5 @@
 import unittest
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -69,7 +70,7 @@ class Top5DiagnosticsTests(unittest.TestCase):
         self.assertEqual(result["scored_count"], 0)
         self.assertEqual(diagnostics["quotes"], {
             "batch_success": 0, "batch_failure": 5,
-            "fallback_success": 0, "fallback_failure": 5,
+            "fallback_success": 0, "fallback_failure": 5, "fallback_not_attempted": 0,
         })
         self.assertEqual(diagnostics["technical_data_insufficient_count"], 5)
         self.assertEqual(diagnostics["primary_exclusions"], {"no_quotes": 5})
@@ -109,16 +110,47 @@ class Top5DiagnosticsTests(unittest.TestCase):
         })
         self.assertEqual(diagnostics["missing_quote_fields"]["volume"], 5)
 
-    def test_nonempty_batch_keeps_partial_failures_without_fallback(self):
+    def test_nonempty_batch_only_retries_missing_closes(self):
         self.batch.return_value = SimpleNamespace(empty=False, shape=(1, 1))
+        self.fallback.return_value = {"2301.TW": {"closes": [110]}}
         with patch("market_scan._extract_series", side_effect=lambda _, ticker, field:
                    [100] if ticker == "2300.TW" and field == "Close" else []):
             result, diagnostics = self.preview()
-        self.fallback.assert_not_called()
+        self.assertEqual(
+            [row["symbol"] for row in self.fallback.call_args.args[0]],
+            ["2301", "2302", "2303", "2304"],
+        )
         self.assertFalse(result["batch_empty"])
         self.assertEqual(result["eligible_count"], 0)
         self.assertEqual(diagnostics["quotes"]["batch_success"], 1)
         self.assertEqual(diagnostics["quotes"]["batch_failure"], 4)
-        self.assertEqual(diagnostics["quotes"]["fallback_failure"], 0)
-        self.assertEqual(diagnostics["primary_exclusions"]["no_quotes"], 4)
-        self.assertEqual(sum(diagnostics["decision_types"].values()), 1)
+        self.assertEqual(diagnostics["quotes"]["fallback_success"], 1)
+        self.assertEqual(diagnostics["quotes"]["fallback_failure"], 3)
+        self.assertEqual(diagnostics["primary_exclusions"]["no_quotes"], 3)
+        self.assertEqual(sum(diagnostics["decision_types"].values()), 2)
+
+    def test_partial_fallback_is_bounded_and_skipped_in_official_scan(self):
+        from market_scan import scan_market_top5
+
+        self.quotes.extend({"symbol": str(code), "turnover": 200_000_000} for code in range(2305, 2312))
+        self.batch.return_value = SimpleNamespace(empty=False, shape=(1, 1))
+        with patch("market_scan._extract_series", side_effect=lambda _, ticker, field:
+                   [100] if ticker == "2300.TW" and field == "Close" else []):
+            diagnostics = self.client.get("/scan_top5?limit=30").get_json()["diagnostics"]
+            self.assertEqual(len(self.fallback.call_args.args[0]), 8)
+            self.assertEqual(diagnostics["quotes"]["fallback_failure"], 8)
+            self.assertEqual(diagnostics["quotes"]["fallback_not_attempted"], 3)
+            self.fallback.reset_mock()
+            self.save_history.return_value = {}
+            result = scan_market_top5(limit=30, save=True)
+        self.fallback.assert_not_called()
+        self.assertEqual(result["diagnostics"]["quotes"]["fallback_not_attempted"], 11)
+
+    def test_source_failure_is_distinct_from_empty(self):
+        empty_twse = Mock()
+        empty_twse.json.return_value = {"stat": "OK", "tables": []}
+        with patch("market_scan.requests.get", side_effect=[empty_twse, TimeoutError("private details")]):
+            diagnostics = self.client.get("/scan_top5?limit=30").get_json()["diagnostics"]
+        self.assertEqual(diagnostics["universe"]["raw_count"], 0)
+        self.assertEqual(diagnostics["universe"]["source_fetch_status"], {"twse": "empty", "tpex": "error"})
+        self.assertNotIn("private details", json.dumps(diagnostics))

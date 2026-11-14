@@ -105,6 +105,7 @@ class Top5FreshnessTests(unittest.TestCase):
         self.assertEqual(result["eligible_count"], 0)
         self.assertEqual(result["saved_count"], 0)
         self.assertEqual(result["top5"], [])
+        self.assertNotIn("diagnostics", result)
         self.scan.assert_not_called()
         import market_scan
 
