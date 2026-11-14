@@ -35,7 +35,7 @@ from morning_job import run_morning_report
 
 app = Flask(__name__)
 
-VERSION = "v21.1.1-top5-freshness-hotfix"
+VERSION = "v21.2"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"
@@ -246,6 +246,7 @@ def _scan_response(result: dict, job: str, mode: str, locked: bool = False):
         "market_regime_meta": result.get("market_regime_meta"),
         "decision_engine_version": result.get("decision_engine_version"),
         "message": result.get("message"),
+        **({"diagnostics": result["diagnostics"]} if mode == "preview" else {}),
     })
 
 

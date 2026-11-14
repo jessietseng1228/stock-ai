@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 import os
@@ -33,7 +34,7 @@ YF_TIMEOUT = max(10, int(os.getenv("TOP5_YF_TIMEOUT", "25")))
 TOP5_ALLOWED_DECISIONS = {"🟢 可分批布局", "🔵 突破確認後布局"}
 
 
-def _top5_entry_filter(data: Dict) -> tuple[bool, str]:
+def _top5_entry_filter(data: Dict, diagnostics: Optional[Dict] = None) -> tuple[bool, str]:
     """v20.6 Top5 硬門檻：只有目前具備進場條件的股票才可入選。"""
     plan = data.get("trade_plan") or {}
     decision = str(plan.get("decision") or data.get("decision") or "").strip()
@@ -42,15 +43,25 @@ def _top5_entry_filter(data: Dict) -> tuple[bool, str]:
     entry_high = float(plan.get("entry_high", data.get("entry_high", 0)) or 0)
     stop_loss = float(data.get("stop_loss", 0) or 0)
 
-    if decision not in TOP5_ALLOWED_DECISIONS:
-        return False, f"決策排除：{decision or '無明確進場決策'}"
-    if rr < 1.0:
-        return False, f"風險報酬比不足：{rr:.2f}"
-    if entry_low <= 0 or entry_high < entry_low:
-        return False, "買點區間無效"
-    if stop_loss <= 0 or stop_loss >= entry_low:
-        return False, "停損位置無效"
+    reasons = [
+        (decision not in TOP5_ALLOWED_DECISIONS, "decision", f"決策排除：{decision or '無明確進場決策'}"),
+        (rr < 1.0, "rr", f"風險報酬比不足：{rr:.2f}"),
+        (entry_low <= 0 or entry_high < entry_low, "entry", "買點區間無效"),
+        (stop_loss <= 0 or stop_loss >= entry_low, "stop_loss", "停損位置無效"),
+    ]
+    if diagnostics is not None:
+        diagnostics["decision_types"][decision or "無明確進場決策"] += 1
+    if reason := _record_exclusions(diagnostics, reasons):
+        return False, reason
     return True, "符合進場條件"
+
+
+def _record_exclusions(diagnostics: Optional[Dict], checks: list) -> str:
+    hits = [(key, message) for excluded, key, message in checks if excluded]
+    if hits and diagnostics is not None:
+        diagnostics["primary_exclusions"][hits[0][0]] += 1
+        diagnostics["all_exclusions"].update(key for key, _ in hits)
+    return hits[0][1] if hits else ""
 
 
 def today_taipei() -> str:
@@ -76,7 +87,7 @@ def _is_common_stock(code: str, name: str = "") -> bool:
     return not any(word in name.upper() for word in bad_words)
 
 
-def fetch_twse_quotes() -> List[Dict]:
+def fetch_twse_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
     url = "https://www.twse.com.tw/exchangeReport/MI_INDEX"
     params = {"response": "json", "type": "ALLBUT0999"}
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -93,6 +104,8 @@ def fetch_twse_quotes() -> List[Dict]:
         data_rows = table.get("data") or []
         if "證券代號" not in fields or "證券名稱" not in fields:
             continue
+        if raw_counts is not None:
+            raw_counts["twse"] += len(data_rows)
         idx_code = fields.index("證券代號")
         idx_name = fields.index("證券名稱")
         idx_value = fields.index("成交金額") if "成交金額" in fields else None
@@ -116,7 +129,7 @@ def fetch_twse_quotes() -> List[Dict]:
     return rows
 
 
-def fetch_tpex_quotes() -> List[Dict]:
+def fetch_tpex_quotes(raw_counts: Optional[Counter] = None) -> List[Dict]:
     url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -126,6 +139,8 @@ def fetch_tpex_quotes() -> List[Dict]:
     except Exception:
         return []
 
+    if raw_counts is not None and isinstance(payload, list):
+        raw_counts["tpex"] += len(payload)
     rows: List[Dict] = []
     for item in payload if isinstance(payload, list) else []:
         code = str(item.get("SecuritiesCompanyCode") or item.get("代號") or "").strip()
@@ -143,19 +158,32 @@ def fetch_tpex_quotes() -> List[Dict]:
     return rows
 
 
-def get_market_universe() -> List[Dict]:
-    rows = fetch_twse_quotes() + fetch_tpex_quotes()
+def get_market_universe(diagnostics: Optional[Dict] = None) -> List[Dict]:
+    raw_counts = Counter(twse=0, tpex=0) if diagnostics is not None else None
+    rows = fetch_twse_quotes(raw_counts) + fetch_tpex_quotes(raw_counts)
+    counts = Counter(invalid_or_duplicate=0, turnover_excluded=0)
     seen = set()
     clean: List[Dict] = []
     for row in rows:
         code = display_symbol(row.get("symbol", ""))
         if not code or code in seen:
+            counts["invalid_or_duplicate"] += 1
             continue
         if row.get("turnover", 0) < MIN_TURNOVER:
+            counts["turnover_excluded"] += 1
             continue
         seen.add(code)
         row["symbol"] = code
         clean.append(row)
+    if diagnostics is not None:
+        raw_count = sum(raw_counts.values())
+        diagnostics["universe"] = {
+            "raw_count": raw_count,
+            "non_common_or_malformed": raw_count - len(rows),
+            **counts,
+            "count": len(clean),
+            "min_turnover": MIN_TURNOVER,
+        }
     return sorted(clean, key=lambda item: item.get("turnover", 0), reverse=True)
 
 
@@ -466,7 +494,12 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     """從高成交值候選池批次抓歷史行情，產生 Top5。"""
     scan_date = today_taipei()
     requested_limit = max(5, min(int(limit or DEFAULT_CANDIDATE_LIMIT), 150))
-    universe = get_market_universe()
+    diagnostics = {
+        "primary_exclusions": Counter(),
+        "all_exclusions": Counter(),
+        "decision_types": Counter(),
+    }
+    universe = get_market_universe(diagnostics)
     candidates = universe[:requested_limit]
     rows: List[Dict] = []
     learning_rows = get_completed_ai_learning_history(limit=2000)
@@ -476,6 +509,8 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     batch = _batch_download(candidates)
     batch_is_empty = bool(batch is None or getattr(batch, "empty", True))
     fallback_data = _fallback_chart_batch(candidates) if batch_is_empty else {}
+    quotes = Counter(batch_success=0, batch_failure=0, fallback_success=0, fallback_failure=0)
+    missing_fields = Counter()
 
     for quote in candidates:
         code = quote["symbol"]
@@ -484,13 +519,22 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         volumes = _extract_series(batch, ticker, "Volume")
         highs = _extract_series(batch, ticker, "High")
         lows = _extract_series(batch, ticker, "Low")
+        quotes["batch_success" if closes else "batch_failure"] += 1
+        if batch_is_empty:
+            quotes["fallback_success" if ticker in fallback_data else "fallback_failure"] += 1
         if not closes and ticker in fallback_data:
             closes = fallback_data[ticker].get("closes", [])
             volumes = fallback_data[ticker].get("volumes", [])
             highs = fallback_data[ticker].get("highs", [])
             lows = fallback_data[ticker].get("lows", [])
+        missing_fields.update(
+            field for field, values in (("close", closes), ("volume", volumes), ("high", highs), ("low", lows))
+            if not values
+        )
         data = _build_data_from_values(ticker, closes, volumes, highs, lows)
         if not data:
+            reason = "no_quotes" if not closes else "technical_data_insufficient"
+            _record_exclusions(diagnostics, [(True, reason, reason)])
             continue
 
         price = float(data.get("price", 0) or 0)
@@ -498,9 +542,12 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         five_pct = float(data.get("five_pct", 0) or 0)
         effective_volume = float(data.get("volume", 0) or quote.get("volume", 0) or 0)
 
-        if price <= 0 or change_pct <= -6 or five_pct <= -12:
-            continue
-        if effective_volume and effective_volume < 300_000:
+        if _record_exclusions(diagnostics, [
+            (price <= 0, "price", "price"),
+            (change_pct <= -6, "daily_change", "daily_change"),
+            (five_pct <= -12, "five_day_change", "five_day_change"),
+            (bool(effective_volume) and effective_volume < 300_000, "volume", "volume"),
+        ]):
             continue
 
         data["name"] = quote.get("name") or data.get("name", "")
@@ -525,7 +572,7 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
         data["score"] = decision_result["final_score"]
         data["stars"] = score_to_stars(data["score"])
         data["trend"] = trend_label(data["score"])
-        eligible, filter_reason = _top5_entry_filter(data)
+        eligible, filter_reason = _top5_entry_filter(data, diagnostics)
         data["top5_eligible"] = eligible
         data["top5_filter_reason"] = filter_reason
         rows.append(data)
@@ -536,10 +583,23 @@ def scan_market_top5(limit: int = DEFAULT_CANDIDATE_LIMIT, save: bool = True) ->
     stored_rows = eligible_rows[:DEFAULT_STORE_COUNT]
     saved_count = save_market_top5(scan_date, stored_rows) if save else 0
     history_result = save_ai_recommend_history(scan_date, stored_rows, limit=5) if save else {"saved_count": 0}
+    diagnostics.update({
+        "candidate_count": len(candidates),
+        "outside_candidate_limit": len(universe) - len(candidates),
+        "quotes": quotes,
+        "missing_quote_fields": missing_fields,
+        "technical_data_insufficient_count": (
+            diagnostics["primary_exclusions"]["no_quotes"]
+            + diagnostics["primary_exclusions"]["technical_data_insufficient"]
+        ),
+        "scored_count": len(rows),
+        "eligible_count": len(eligible_rows),
+    })
 
     return {
         "status": "ok",
         "scan_date": scan_date,
+        "diagnostics": diagnostics,
         "universe_count": len(universe),
         "candidate_count": len(candidates),
         "scored_count": len(rows),

@@ -81,7 +81,7 @@ class Top5FreshnessTests(unittest.TestCase):
         self.assertNotIn("1101", page)
         self.assertNotIn("2026-10-13", page)
         status = self.client.get("/top5_status").get_json()
-        self.assertEqual(status["version"], "v21.1.1-top5-freshness-hotfix")
+        self.assertEqual(status["version"], self.app_module.VERSION)
         self.assertEqual(status["scan_date"], self.date)
         self.assertIs(status["has_result"], has_result)
         self.assertEqual(status["count"], count)
