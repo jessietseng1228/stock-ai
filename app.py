@@ -36,7 +36,7 @@ from overnight_risk import get_overnight_risk
 
 app = Flask(__name__)
 
-VERSION = "v21.3"
+VERSION = "v21.3.1"
 
 STATE_ADD = "WAIT_ADD_STOCK"
 STATE_DELETE = "WAIT_DELETE_STOCK"

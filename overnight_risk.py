@@ -125,35 +125,56 @@ def _fetch_us(day, previous, now):
     opening = datetime.combine(day, time(9), TAIPEI)
     expected = _previous_trading_day(opening.astimezone(NEW_YORK).date() + timedelta(days=1), US_HOLIDAYS)
     keys = {"sp500": "SP500", "nasdaq": "NASDAQCOM"}
+    dates = {
+        "expected_trade_date": expected.isoformat() if expected else None,
+        "latest_available_trade_date": None,
+    }
     if expected is None or previous is None:
-        return {key: _source(key, detail="calendar_unavailable") for key in keys}
+        return {key: _source(key, detail="calendar_unavailable", **dates) for key in keys}
     if _us_close(expected) > min(now, opening):
-        return {key: _source(key, detail="session_not_complete") for key in keys}
+        return {key: _source(key, detail="session_not_complete", **dates) for key in keys}
     prior = _previous_trading_day(expected, US_HOLIDAYS)
     if prior is None:
-        return {key: _source(key, detail="calendar_unavailable") for key in keys}
+        return {key: _source(key, detail="calendar_unavailable", **dates) for key in keys}
 
-    response = requests.get(FRED_URL, params={
-        "id": "SP500,NASDAQCOM", "cosd": prior.isoformat(), "coed": expected.isoformat(),
-    }, timeout=4)
-    response.raise_for_status()
+    try:
+        response = requests.get(FRED_URL, params={
+            "id": "SP500,NASDAQCOM", "cosd": (prior - timedelta(days=14)).isoformat(),
+            "coed": expected.isoformat(),
+        }, timeout=4)
+        response.raise_for_status()
+    except requests.RequestException:
+        return {key: _source(key, detail="network_error", **dates) for key in keys}
     observations = {}
-    for row in csv.DictReader(StringIO(response.text)):
-        observed = date.fromisoformat(row["observation_date"])
-        if observed <= expected:
-            observations[observed] = row
+    try:
+        reader = csv.DictReader(StringIO(response.text))
+        if not reader.fieldnames or "observation_date" not in reader.fieldnames:
+            raise ValueError("Missing date column")
+        for row in reader:
+            observed = date.fromisoformat(row["observation_date"])
+            if observed <= expected:
+                observations[observed] = row
+    except (ValueError, TypeError, KeyError, csv.Error):
+        return {key: _source(key, detail="invalid_response", **dates) for key in keys}
 
     results = {}
     for key, column in keys.items():
+        if column not in reader.fieldnames:
+            results[key] = _source(key, detail="column_missing", **dates)
+            continue
         latest = max((d for d, row in observations.items()
-                      if _trading_day(d, US_HOLIDAYS) and (_number(row[column]) or 0) > 0), default=None)
+                      if _trading_day(d, US_HOLIDAYS) and (_number(row.get(column)) or 0) > 0), default=None)
         if latest is None:
-            results[key] = _source(key, detail="close_missing")
+            results[key] = _source(key, detail="close_missing", **dates)
             continue
         close = _us_close(latest)
-        timestamp = {"market_data_time": close.isoformat(), "trade_date": latest.isoformat()}
+        timestamp = {
+            **dates, "latest_available_trade_date": latest.isoformat(),
+            "market_data_time": close.isoformat(), "trade_date": latest.isoformat(),
+        }
         if latest != expected or close < datetime.combine(previous, time(15), TAIPEI):
-            results[key] = _source(key, "stale", detail="session_date_mismatch", **timestamp)
+            detail = "source_delayed" if latest != expected else "market_closed"
+            results[key] = _source(key, "stale", detail=detail, **timestamp)
             continue
         base = _number(observations.get(prior, {}).get(column))
         value = _number(observations[latest][column])
@@ -164,19 +185,28 @@ def _fetch_us(day, previous, now):
     return results
 
 
+def _usable_source(item):
+    change = item.get("change_pct")
+    return item.get("status") == "ok" and not item.get("is_stale", False) and (
+        isinstance(change, (int, float)) and isfinite(change)
+    )
+
+
 def assess_risk(sources, medium_drop=MEDIUM_DROP_PCT, high_drop=HIGH_DROP_PCT):
-    """下跌幅度使用百分點。資料不齊時，保留可用資料但不判定整體風險。"""
+    """下跌幅度使用百分點。以有效當期資料揭露已知風險。"""
     if not 0 < medium_drop < high_drop or not isfinite(high_drop):
         raise ValueError("Expected 0 < medium_drop < high_drop")
-    missing = [item["source"] for item in sources.values() if item["status"] != "ok"]
-    if missing:
-        return "資料不足", [f"{name}缺少當期已完成行情" for name in missing]
-    declines = [item for item in sources.values() if item["change_pct"] <= -medium_drop]
+    missing = [item["source"] for item in sources.values() if not _usable_source(item)]
+    declines = [item for item in sources.values()
+                if _usable_source(item) and item["change_pct"] <= -medium_drop]
     reasons = [f"{item['source']} {item['change_pct']:+.2f}%" for item in declines]
+    reasons.extend(f"{name}缺少當期已完成行情" for name in missing)
     if len(declines) >= 2 or any(item["change_pct"] <= -high_drop for item in declines):
         return "高", reasons
     if declines:
         return "中", reasons
+    if missing:
+        return "資料不足", reasons
     return "低", ["各來源跌幅未達觀測門檻"]
 
 
@@ -206,6 +236,7 @@ def collect_overnight_risk(now):
         "as_of": {"taipei_time": now.isoformat(timespec="seconds"),
                   "trade_date": day.isoformat() if is_trading_day else None},
         "sources": sources, "risk_level": level, "risk_reasons": reasons, "mode": "shadow",
+        "data_completeness": "complete" if all(_usable_source(item) for item in sources.values()) else "incomplete",
     }
 
 
@@ -223,12 +254,23 @@ def get_overnight_risk():
 
 def format_overnight_summary(risk):
     labels = {"tx": "台指期夜盤", "sp500": "S&P 500", "nasdaq": "Nasdaq"}
-    lines = [f"隔夜市場風險｜{risk['risk_level']}"]
+    incomplete = risk.get("data_completeness") == "incomplete"
+    level = risk["risk_level"]
+    heading = {"高": "已知高風險", "中": "已知部分風險"}.get(level, level) if incomplete else level
+    lines = [f"隔夜市場風險｜{heading}"]
+    if incomplete:
+        us_missing = any(risk["sources"][key]["status"] != "ok" for key in ("sp500", "nasdaq"))
+        lines.append("美股資料不完整" if us_missing else "資料不完整")
     for key, item in risk["sources"].items():
         market_time = item["market_data_time"]
         suffix = datetime.fromisoformat(market_time).astimezone(TAIPEI).strftime("（%m/%d %H:%M 台北）") if market_time else ""
-        change = f"{item['change_pct']:+.2f}%" if item["status"] == "ok" else (
-            "資料過期" if item["is_stale"] else "不可用"
+        details = {
+            "source_delayed": "資料延遲／待更新", "market_closed": "休市／無本期收盤",
+            "network_error": "連線失敗", "source_error": "來源錯誤",
+            "session_not_complete": "時段未完成",
+        }
+        change = f"{item['change_pct']:+.2f}%" if item["status"] == "ok" else details.get(
+            item.get("detail"), "資料過期" if item["is_stale"] else "不可用"
         )
         contract = f" TX{item['contract']}" if item.get("contract") else ""
         lines.append(f"{labels[key]}{contract} {change}{suffix}")

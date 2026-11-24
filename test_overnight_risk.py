@@ -156,9 +156,9 @@ class OvernightIntegrationTests(unittest.TestCase):
         ):
             response = self.client.get("/overnight_risk_status")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.get_json()["version"], "v21.3")
+            self.assertEqual(response.get_json()["version"], "v21.3.1")
             self.assertEqual(response.get_json()["mode"], "shadow")
-            self.assertEqual(self.client.get("/health").get_json(), {"status": "ok", "version": "v21.3"})
+            self.assertEqual(self.client.get("/health").get_json(), {"status": "ok", "version": "v21.3.1"})
         morning.assert_not_called()
         scan.assert_not_called()
 
