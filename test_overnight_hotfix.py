@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 import unittest
 from datetime import date, datetime
 from unittest.mock import Mock, patch
@@ -54,8 +55,24 @@ class HotfixTests(unittest.TestCase):
         self.assertIn("已知高風險", summary)
         self.assertIn("美股資料不完整", summary)
         self.assertIn("資料延遲／待更新", summary)
-        self.assertIn("11/20 05:00", summary)
-        self.assertLess(len(summary), 300)
+        self.assertIn("最後有效資料交易日：11/19（美東）｜預期交易日：11/20（美東）", summary)
+        self.assertNotIn("11/20 05:00 台北", summary)
+        self.assertLess(len(summary), 400)
+
+    def test_delayed_us_dates_with_missing_values(self):
+        for latest, expected in ((None, None), ("2026-11-19", None), (None, "2026-11-20")):
+            with self.subTest(latest=latest, expected=expected):
+                snapshot = self.snapshot()
+                for key in ("sp500", "nasdaq"):
+                    snapshot["sources"][key].update(
+                        latest_available_trade_date=latest, expected_trade_date=expected,
+                        market_data_time=None,
+                    )
+                summary = risk.format_overnight_summary(snapshot)
+                self.assertIn("最後有效資料交易日：" + ("11/19（美東）" if latest else "未知"), summary)
+                self.assertIn("預期交易日：" + ("11/20（美東）" if expected else "未知"), summary)
+                self.assertNotIn("None", summary)
+                self.assertEqual(snapshot["risk_level"], "高")
 
     def test_partial_medium_and_no_partial_low(self):
         self.assertEqual(self.snapshot("-0.50%")["risk_level"], "中")
@@ -122,6 +139,7 @@ class HotfixIntegrationTests(unittest.TestCase):
 
     def test_diagnostics_manual_and_push_consistency(self):
         snapshot = HotfixTests().snapshot()
+        original = deepcopy(snapshot)
         event = {"type": "message", "replyToken": "test", "source": {"userId": "test"},
                  "message": {"type": "text", "text": "今日早報"}}
         with (
@@ -143,3 +161,9 @@ class HotfixIntegrationTests(unittest.TestCase):
             self.assertEqual(run_morning_report()["sent"], 1)
         self.assertEqual(reply.call_args.args[1:], push.call_args.args[1:])
         self.assertIn("已知高風險", json.dumps(reply.call_args.args, ensure_ascii=False))
+        self.assertEqual(snapshot, original)
+        _, _, flex, fallback = reply.call_args.args
+        self.assertIn("最後有效資料交易日：11/19（美東）", fallback)
+        self.assertIn("預期交易日：11/20（美東）", json.dumps(flex, ensure_ascii=False))
+        self.assertLess(len(fallback), 500)
+        self.assertLess(len(json.dumps(flex, ensure_ascii=False).encode("utf-8")), 30_000)

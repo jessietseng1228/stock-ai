@@ -264,6 +264,12 @@ def format_overnight_summary(risk):
     for key, item in risk["sources"].items():
         market_time = item["market_data_time"]
         suffix = datetime.fromisoformat(market_time).astimezone(TAIPEI).strftime("（%m/%d %H:%M 台北）") if market_time else ""
+        if key in ("sp500", "nasdaq") and (item["is_stale"] or item.get("detail") == "source_delayed"):
+            latest = item.get("latest_available_trade_date")
+            expected = item.get("expected_trade_date")
+            latest_label = f"{date.fromisoformat(latest):%m/%d}（美東）" if latest else "未知"
+            expected_label = f"{date.fromisoformat(expected):%m/%d}（美東）" if expected else "未知"
+            suffix = f"\n最後有效資料交易日：{latest_label}｜預期交易日：{expected_label}"
         details = {
             "source_delayed": "資料延遲／待更新", "market_closed": "休市／無本期收盤",
             "network_error": "連線失敗", "source_error": "來源錯誤",
